@@ -33,3 +33,24 @@
 {"at":"2026-10-02T21:52:41.779Z","actor":"8724e666-3b9f-47cd-a9c8-c45af498d5d3","verb":"bp task add","id":"TASK-003","path":"tasks/TASK-003.md"}
 {"at":"2026-10-02T21:52:41.842Z","actor":"8724e666-3b9f-47cd-a9c8-c45af498d5d3","verb":"bp task add","id":"TASK-004","path":"tasks/TASK-004.md"}
 {"at":"2026-10-02T21:52:41.908Z","actor":"8724e666-3b9f-47cd-a9c8-c45af498d5d3","verb":"bp order set","id":"WO-001","path":"orders/WO-001.md","from":"draft","to":"in-progress"}
+{"at":"2026-10-02T21:53:38.765Z","actor":"8724e666-3b9f-47cd-a9c8-c45af498d5d3","verb":"bp order progress","id":"WO-001","path":"orders/WO-001.progress.md"}
+{"at":"2026-10-02T21:53:38.830Z","actor":"8724e666-3b9f-47cd-a9c8-c45af498d5d3","verb":"bp order progress","id":"WO-001","path":"orders/WO-001.progress.md"}
+{"at":"2026-10-02T21:55:42.402Z","actor":"b67adaf4-0536-4eb0-81c8-796f19b41b25","verb":"bp order progress","id":"WO-001","path":"orders/WO-001.progress.md"}
+{"at":"2026-10-02T22:17:07.656Z","actor":"b67adaf4-0536-4eb0-81c8-796f19b41b25","verb":"bp order check","id":"WO-001","path":"orders/WO-001.acceptance.md"}
+{"at":"2026-10-02T22:17:07.724Z","actor":"b67adaf4-0536-4eb0-81c8-796f19b41b25","verb":"bp order check","id":"WO-001","path":"orders/WO-001.acceptance.md"}
+{"at":"2026-10-02T22:17:07.790Z","actor":"b67adaf4-0536-4eb0-81c8-796f19b41b25","verb":"bp order check","id":"WO-001","path":"orders/WO-001.acceptance.md"}
+{"at":"2026-10-02T22:17:07.856Z","actor":"b67adaf4-0536-4eb0-81c8-796f19b41b25","verb":"bp order check","id":"WO-001","path":"orders/WO-001.acceptance.md"}
+{"at":"2026-10-02T22:17:07.947Z","actor":"b67adaf4-0536-4eb0-81c8-796f19b41b25","verb":"bp order check","id":"WO-001","path":"orders/WO-001.acceptance.md"}
+{"at":"2026-10-02T22:17:08.018Z","actor":"b67adaf4-0536-4eb0-81c8-796f19b41b25","verb":"bp order check","id":"WO-001","path":"orders/WO-001.acceptance.md"}
+{"at":"2026-10-02T22:17:08.084Z","actor":"b67adaf4-0536-4eb0-81c8-796f19b41b25","verb":"bp order check","id":"WO-001","path":"orders/WO-001.acceptance.md"}
+{"at":"2026-10-02T22:17:08.158Z","actor":"b67adaf4-0536-4eb0-81c8-796f19b41b25","verb":"bp order check","id":"WO-001","path":"orders/WO-001.acceptance.md"}
+{"at":"2026-10-02T22:17:08.225Z","actor":"b67adaf4-0536-4eb0-81c8-796f19b41b25","verb":"bp order check","id":"WO-001","path":"orders/WO-001.acceptance.md"}
+{"at":"2026-10-02T22:17:08.295Z","actor":"b67adaf4-0536-4eb0-81c8-796f19b41b25","verb":"bp order check","id":"WO-001","path":"orders/WO-001.acceptance.md"}
+{"at":"2026-10-02T22:17:08.410Z","actor":"b67adaf4-0536-4eb0-81c8-796f19b41b25","verb":"bp order progress","id":"WO-001","path":"orders/WO-001.progress.md"}
+{"at":"2026-10-02T22:18:53.109Z","actor":"b67adaf4-0536-4eb0-81c8-796f19b41b25","verb":"bp idea add","id":"IDEA-001","path":"ideas/IDEA-001.md"}
+{"at":"2026-10-02T22:19:12.347Z","actor":"8724e666-3b9f-47cd-a9c8-c45af498d5d3","verb":"bp order progress","id":"WO-001","path":"orders/WO-001.progress.md"}
+{"at":"2026-10-02T22:19:17.269Z","actor":"b67adaf4-0536-4eb0-81c8-796f19b41b25","verb":"bp order progress","id":"WO-001","path":"orders/WO-001.progress.md"}
+{"at":"2026-10-02T22:20:26.613Z","actor":"8724e666-3b9f-47cd-a9c8-c45af498d5d3","verb":"bp order progress","id":"WO-001","path":"orders/WO-001.progress.md"}
+{"at":"2026-10-02T22:24:11.670Z","actor":"darragh","verb":"bp order findings append","id":"WO-001","path":"orders/WO-001.findings.md"}
+{"at":"2026-10-02T22:24:32.644Z","actor":"8724e666-3b9f-47cd-a9c8-c45af498d5d3","verb":"bp order close","id":"WO-001","path":"orders/WO-001.close.md"}
+{"at":"2026-10-02T22:24:32.645Z","actor":"8724e666-3b9f-47cd-a9c8-c45af498d5d3","verb":"bp order close","id":"WO-001","path":"orders/WO-001.md","from":"in-progress","to":"closed"}
