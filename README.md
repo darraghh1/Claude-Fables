@@ -125,6 +125,16 @@ tool calls, Claude's own words ──► activity log (last 14 lines)
 
 Every scene is one small model request, so this costs a few requests per minute while Claude is working.
 
+## Terminal
+
+In a terminal, the same scenes play above the prompt as coloured half-block cells, with the caption typed out in a bubble beside Claude and the chapter tag as text. Each scene is drawn by `renderer/frames.ts`, which needs three things on the machine:
+
+- **bun** on `PATH`.
+- **Chromium** (or Chrome). The config menu's **Chromium** (`pluginConfigs.fables.chromiumPath`) names it when it is not `chromium` on `PATH`.
+- **A 24-bit-colour terminal.** Through SSH and tmux, turn on true colour in tmux (`set -as terminal-features ',*:RGB'`).
+
+The band takes 16 rows, or one less than it has room for; **Terminal band rows** (`pluginConfigs.fables.terminalRows`) changes that. Without bun or Chromium, or when no frame arrives within 5 seconds, the band shows the caption as text in a box and writes the reason once to the debug log.
+
 ## The scenes
 
 <p align="center"><img src="assets/scenes.gif" alt="A tour of the seven scenes: forest, space, city, desert, volcano, lab and night village" width="960"></p>

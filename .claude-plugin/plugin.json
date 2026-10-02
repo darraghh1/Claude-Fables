@@ -11,6 +11,18 @@
       "description": "The model that writes each cartoon scene: Sonnet, or Haiku for quicker, cheaper scenes. /fables model switches it in a session.",
       "default": "sonnet",
       "options": ["sonnet", "haiku"]
+    },
+    "terminalRows": {
+      "type": "number",
+      "title": "Terminal band rows",
+      "description": "How many rows the cartoon takes above the prompt in a terminal; never more than the band has room for, less one.",
+      "default": 16
+    },
+    "chromiumPath": {
+      "type": "string",
+      "title": "Chromium",
+      "description": "The Chromium (or Chrome) the terminal band draws its frames with: a command on PATH or an absolute path.",
+      "default": "chromium"
     }
   }
 }

@@ -6,6 +6,8 @@ import { DEFAULT_LOOK, findLook, LOOK_NAMES, LOOKS, lookFor } from './looks'
 import type { FablesScene } from '../types'
 
 import { H, MAX_SVG, resumeAt, sceneToSvg, speaksAfter, W } from './svg'
+import { bandBox as terminalBox } from './terminal/compose'
+import { Player, type PlayerHost, RASTER_KEY } from './terminal/player'
 
 const scene = atom({ plugin: 'fables', key: 'scene' } as const, null)
 const enabled = atom({ plugin: 'fables', key: 'enabled' } as const, true)
@@ -27,6 +29,8 @@ const OWN_TOOLS = 'mcp__fables__'
 const PX_PER_COLUMN = 8
 /** CSS pixels per stage unit: the stage's H units come out this many times taller. */
 const SCALE = 1.5
+/** The terminal band's height in rows when the config menu says nothing. */
+const TERMINAL_ROWS = 16
 
 /**
  * The band's box in CSS pixels: its whole width, at a fixed height so the art and
@@ -37,12 +41,30 @@ function bandBox(columns: number): { width: number; height: number } {
   return { width, height: Math.round(H * SCALE) }
 }
 
+/** The terminal player's host: Claude Code's clock, the frame helper's process, and the band it repaints. */
+function playerHost($: EngineInterface): PlayerHost {
+  return {
+    now: () => $.clock.now(),
+    every: (ms, fn) => $.clock.every(ms, fn),
+    after: (ms, fn) => $.clock.after(ms, fn),
+    spawn: request => $.process.spawn(request),
+    blit: args => $.ui.blit(args),
+    log: text => $.ui.log(text, { to: 'debug' }),
+    invalidate: () => $.ui.invalidate('ui.render'),
+    root: $.plugin.root,
+  }
+}
+
 /** The narrator's host in a session: Claude Code's clock, its model, the band, and how the band draws a scene. */
-function host($: EngineInterface, band: Band): Host {
+function host($: EngineInterface, band: Band, player: Player): Host {
   return {
     now: () => $.clock.now(),
     complete: ask => $.model.complete(ask),
-    show: drawn => update($, scene, () => drawn),
+    show: drawn => {
+      // The band cleared (turned off, or done lingering): the terminal's frame helper ends with it.
+      if (!drawn) void player.stop()
+      return update($, scene, () => drawn)
+    },
     speaksAfter: async next => speaksAfter((await draw($, band, next)).base) * 1000,
   }
 }
@@ -97,6 +119,9 @@ export const register: Register = (on, options) => {
   const configured = findModel(options.model) ?? DEFAULT_MODEL
   n.model = configured
   n.look = DEFAULT_LOOK
+  const terminalRows = typeof options.terminalRows === 'number' && options.terminalRows > 0 ? options.terminalRows : TERMINAL_ROWS
+  const chromiumPath = typeof options.chromiumPath === 'string' && options.chromiumPath ? options.chromiumPath : 'chromium'
+  const player = new Player({ chromiumPath })
 
   on('session.start', async ($, e, next) => {
     n.isOn = (await $.store.get(STORE_ENABLED)) !== false
@@ -112,7 +137,7 @@ export const register: Register = (on, options) => {
       description: 'Claude Fables: turn the cartoons above the prompt on or off, pick a style, or pick the model that writes them',
       argumentHint: '[on|off|style [name|off]|model [sonnet|haiku]]',
     })
-    $.clock.every(1000, () => void n.tick(host($, band)))
+    $.clock.every(1000, () => void n.tick(host($, band, player)))
     return next(e)
   })
 
@@ -144,7 +169,7 @@ export const register: Register = (on, options) => {
     const px = /^pixel(?:\s+(on|off))?$/.exec(arg)
     if (px) return chooseLook($, n, px[1] === 'off' || (!px[1] && n.look === 'pixel') ? 'original' : 'pixel')
     const value = arg === 'on' ? true : arg === 'off' ? false : !n.isOn
-    await setOn($, n, host($, band), value)
+    await setOn($, n, host($, band, player), value)
     return {
       text: value
         ? `Claude Fables is on: cartoons written by ${MODEL_LABELS[n.model]} play above the prompt while Claude works.`
@@ -183,6 +208,29 @@ export const register: Register = (on, options) => {
   })
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
+    if (e.surface === 'terminal') {
+      if (e.props.hasSurvey) return next(e)
+      const current = await read($, scene)
+      if (!current || !(await read($, enabled))) {
+        void player.stop()
+        return next(e)
+      }
+      const { Box, Raster, Text } = $.ui.resolve(e)
+      const { columns, rows } = terminalBox(e.props.bodyColumns, e.props.maxRows, terminalRows)
+      await player.follow(playerHost($), { scene: current, columns, rows, look: await read($, style), requestId: e.requestId })
+      if (player.failed !== undefined) {
+        // No frames (no bun, no Chromium, the helper failed): the caption, as text.
+        return (
+          <Box key="fables" borderStyle="round" flexDirection="column" paddingX={1}>
+            {current.title ? <Text bold>{current.title}</Text> : null}
+            <Text>{current.caption}</Text>
+          </Box>
+        )
+      }
+      const cells = player.cellsAt(await $.clock.now()) ?? ''
+      player.drawn(cells)
+      return <Raster key={RASTER_KEY} columns={columns} rows={rows} cells={cells} />
+    }
     if (e.surface !== 'desktop' || e.props.hasSurvey) return next(e)
     const current = await read($, scene)
     if (!current || !(await read($, enabled))) return next(e)
