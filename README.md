@@ -131,9 +131,9 @@ In a terminal, the same scenes play above the prompt as coloured half-block cell
 
 - **bun** on `PATH`.
 - **Chromium** (or Chrome). The config menu's **Chromium** (`pluginConfigs.fables.chromiumPath`) names it when it is not `chromium` on `PATH`.
-- **A 24-bit-colour terminal.** Through SSH and tmux, turn on true colour in tmux (`set -as terminal-features ',*:RGB'`).
+- **A 24-bit-colour terminal.** Inside tmux, Claude Code falls back to 256 colours and the art turns to grey smudges; start it with `CLAUDE_CODE_TMUX_TRUECOLOR=1` (and let tmux pass true colour through to your terminal, `set -as terminal-features ',*:RGB'`).
 
-The band takes 16 rows, or one less than it has room for; **Terminal band rows** (`pluginConfigs.fables.terminalRows`) changes that. Without bun or Chromium, or when no frame arrives within 5 seconds, the band shows the caption as text in a box and writes the reason once to the debug log.
+The default Pixel Art style is drawn from the original look in the terminal, whose half blocks are pixels already. The band takes 16 rows, or one less than it has room for; **Terminal band rows** (`pluginConfigs.fables.terminalRows`) changes that. Without bun or Chromium, or when no frame arrives within 5 seconds, the band shows the caption as text in a box and writes the reason once to the debug log.
 
 ## The scenes
 

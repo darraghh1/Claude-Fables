@@ -45,7 +45,7 @@ type Helper = (n: number, columns: number, rows: number) => AsyncGenerator<{ str
  * The world under the mod: a clock, a store, the band's state, a helper
  * standing in for renderer/frames.ts, and a record of what reached the host.
  */
-function world(on: On, helper?: (clock: MockClock) => Helper) {
+function world(on: On, helper?: (clock: MockClock) => Helper, blitDeny?: string) {
   const clock = mock.clock(on, { now: 1_000_000 })
   mock.store(on)
   const state: Record<string, unknown> = { scene: SCENE, enabled: true, style: DEFAULT_LOOK }
@@ -61,7 +61,7 @@ function world(on: On, helper?: (clock: MockClock) => Helper) {
   })
   on('ui.blit', async (_$, e) => {
     if ('cells' in e) blits.push(e.cells)
-    return { value: {} }
+    return { value: blitDeny === undefined ? {} : { deny: blitDeny } }
   })
   on('ui.log', async (_$, e) => {
     logs.push({ text: e.text, to: e.to })
@@ -117,8 +117,33 @@ describe('the terminal band', () => {
     expect(rasters[0]?.key).toBe('fables')
     expect(rasters[0]?.props).toMatchObject({ columns: 200, rows: 16 })
     await w.clock.settle()
-    expect(w.jobs[0]).toMatchObject({ columns: 200, rows: 16, fps: 12, look: DEFAULT_LOOK })
+    expect(w.jobs[0]).toMatchObject({ columns: 200, rows: 16, fps: 12 })
     expect(w.jobs[0]?.argv).toEqual(['bun', expect.stringContaining('/renderer/frames.ts')])
+    await $.command.run({ command: 'fables', args: 'off' })
+    await ui.unmount()
+  })
+
+  test('asks the helper for the original look when the band is in pixel art (ISS-001), and for any other look as itself', async ($, on) => {
+    const w = world(on, live())
+    expect(DEFAULT_LOOK).toBe('pixel')
+    const ui = await $.ui.mount({ plugin: 'fables', surface: 'terminal', component: 'AbovePrompt', props: band(200, 30) })
+    await w.clock.settle()
+    expect(w.jobs[0]?.look).toBe('original')
+    w.state.style = 'ukiyoe'
+    await ui.redraw()
+    await w.clock.advance(500)
+    expect(w.jobs[1]?.look).toBe('ukiyoe')
+    await $.command.run({ command: 'fables', args: 'off' })
+    await ui.unmount()
+  })
+
+  test('says once in the debug log when a frame is not painted', async ($, on) => {
+    const w = world(on, live(), 'another size')
+    const ui = await $.ui.mount({ plugin: 'fables', surface: 'terminal', component: 'AbovePrompt', props: band(200, 30) })
+    await w.clock.advance(1000)
+    const denied = w.logs.filter(l => l.to === 'debug' && l.text.includes('not painted'))
+    expect(denied).toHaveLength(1)
+    expect(denied[0]?.text).toContain('another size')
     await $.command.run({ command: 'fables', args: 'off' })
     await ui.unmount()
   })

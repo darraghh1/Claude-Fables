@@ -52,6 +52,15 @@ export type Want = { scene: FablesScene; columns: number; rows: number; look: st
 
 type Line = { ready: true; speaksAfter: number } | { i: number; cells: string } | { error: string }
 
+/**
+ * The style the helper draws a look in. Pixel art (the default) pixelizes the
+ * stage with an SVG filter that Chromium draws as a flat, near-black stage
+ * when the frame helper decodes it as an image (ISS-001);
+ * the terminal's half blocks are pixels already, so it draws the original
+ * look, which pixel art is made from. Every other look draws as itself.
+ */
+export const terminalLook = (look: string): string => (look === 'pixel' ? 'original' : look)
+
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null
 
 /** One NDJSON line from the helper, or undefined for one this player does not read. */
@@ -79,6 +88,7 @@ export class Player {
   private speaks?: number
   private failure?: string
   private hasLogged = false
+  private hasLoggedDeny = false
   private generation = 0
   private stream?: HookStream<ProcessSpawnChunk, ProcessSpawnResult>
   private loopEnded: Promise<void> = Promise.resolve()
@@ -163,7 +173,13 @@ export class Player {
     const cells = this.cellsAt(await host.now())
     if (cells === undefined || cells === this.lastBlit || generation !== this.generation) return
     this.lastBlit = cells
-    await host.blit({ requestId: this.want.requestId, key: RASTER_KEY, cells }).catch(() => undefined)
+    const result = await host.blit({ requestId: this.want.requestId, key: RASTER_KEY, cells }).catch((error: unknown) => ({
+      deny: error instanceof Error ? error.message : String(error),
+    }))
+    if (result.deny !== undefined && !this.hasLoggedDeny) {
+      this.hasLoggedDeny = true
+      host.log(`fables: a terminal frame was not painted: ${result.deny}`)
+    }
   }
 
   /** Falls back to text for this scene: the helper ends, the reason is logged once, the band is drawn again. */
@@ -186,7 +202,7 @@ export class Player {
     for (const wait of waits) wait.cancel()
     if (!isPreviousEnded) host.log('fables: the last frame helper had not ended; starting the next')
     if (generation !== this.generation) return
-    const job = { scene: want.scene, columns: want.columns, rows: want.rows, look: want.look, fps: FPS, seconds: this.count / FPS }
+    const job = { scene: want.scene, columns: want.columns, rows: want.rows, look: terminalLook(want.look), fps: FPS, seconds: this.count / FPS }
     const stream = host.spawn({
       argv: ['bun', `${host.root}/renderer/frames.ts`],
       input: JSON.stringify(job),
