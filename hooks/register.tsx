@@ -5,6 +5,7 @@ import { DEFAULT_MODEL, Director, findModel, type Host, MODEL_LABELS, NARRATOR_M
 import { DEFAULT_LOOK, findLook, LOOK_NAMES, LOOKS, lookFor } from './looks'
 import type { FablesScene } from '../types'
 
+import { parseScene } from './scene'
 import { H, MAX_SVG, resumeAt, sceneToSvg, speaksAfter, W } from './svg'
 import { bandBox as terminalBox } from './terminal/compose'
 import { Player, type PlayerHost, RASTER_KEY } from './terminal/player'
@@ -17,6 +18,8 @@ const STORE_ENABLED = 'enabled'
 const STORE_PIXEL = 'pixelArt'
 const STORE_STYLE = 'style'
 const STORE_MODEL = 'model'
+/** The last scene shown, so the terminal band is there again in the next session. */
+const STORE_LAST = 'lastScene'
 /** Every scene is drawn with the 3D Claude, in the style the person chose (looks.ts). */
 const FIGURE = '3d'
 /** This plugin's own tools, if it ever registers any, are not part of the story. */
@@ -30,7 +33,7 @@ const PX_PER_COLUMN = 8
 /** CSS pixels per stage unit: the stage's H units come out this many times taller. */
 const SCALE = 1.5
 /** The terminal band's height in rows when the config menu says nothing. */
-const TERMINAL_ROWS = 16
+const TERMINAL_ROWS = 8
 
 /**
  * The band's box in CSS pixels: its whole width, at a fixed height so the art and
@@ -56,13 +59,16 @@ function playerHost($: EngineInterface): PlayerHost {
 }
 
 /** The narrator's host in a session: Claude Code's clock, its model, the band, and how the band draws a scene. */
-function host($: EngineInterface, band: Band, player: Player): Host {
+function host($: EngineInterface, band: Band, kept: Kept): Host {
   return {
     now: () => $.clock.now(),
     complete: ask => $.model.complete(ask),
-    show: drawn => {
-      // The band cleared (turned off, or done lingering): the terminal's frame helper ends with it.
-      if (!drawn) void player.stop()
+    show: async drawn => {
+      // The desktop band clears once the scene has lingered; the terminal band keeps it (and its idle loop) up.
+      if (drawn) {
+        kept.last = drawn
+        await $.store.set(STORE_LAST, drawn)
+      }
       return update($, scene, () => drawn)
     },
     speaksAfter: async next => speaksAfter((await draw($, band, next)).base) * 1000,
@@ -83,8 +89,14 @@ async function chooseModel($: EngineInterface, n: Director, model: NarratorModel
   return { text: `${MODEL_LABELS[model]} now writes the story.` }
 }
 
-async function setOn($: EngineInterface, n: Director, at: Host, value: boolean) {
+async function setOn($: EngineInterface, n: Director, at: Host, kept: Kept, player: Player, value: boolean) {
   await n.setOn(at, value)
+  if (!value) {
+    // Turned off: the terminal band clears too, its loop and any helper end, and no scene comes back next session.
+    kept.last = undefined
+    await $.store.delete(STORE_LAST)
+    void player.stop()
+  }
   await $.store.set(STORE_ENABLED, value)
   await update($, enabled, () => value)
 }
@@ -99,6 +111,11 @@ async function setOn($: EngineInterface, n: Director, at: Host, value: boolean) 
 type Drawn = { scene: string; at: number; key: string; base: string }
 /** The drawing kept, and the band's box as last drawn, so a scene can be drawn the moment it goes up. */
 type Band = { drawn?: Drawn; box: { width: number; height: number } }
+/**
+ * The last scene shown, which the terminal band keeps after the desktop band
+ * clears, and loads from the store at session start.
+ */
+type Kept = { last?: FablesScene }
 
 /** The scene in the band's box and style, drawn once and kept: a scene going up starts its clock. */
 async function draw($: EngineInterface, band: Band, next: FablesScene): Promise<Drawn> {
@@ -122,6 +139,7 @@ export const register: Register = (on, options) => {
   const terminalRows = typeof options.terminalRows === 'number' && options.terminalRows > 0 ? options.terminalRows : TERMINAL_ROWS
   const chromiumPath = typeof options.chromiumPath === 'string' && options.chromiumPath ? options.chromiumPath : 'chromium'
   const player = new Player({ chromiumPath })
+  const kept: Kept = {}
 
   on('session.start', async ($, e, next) => {
     n.isOn = (await $.store.get(STORE_ENABLED)) !== false
@@ -132,12 +150,20 @@ export const register: Register = (on, options) => {
     const smooth = (await $.store.get(STORE_PIXEL)) === false
     n.look = typeof saved === 'string' && LOOKS[saved] ? saved : smooth ? 'original' : DEFAULT_LOOK
     await update($, style, () => n.look)
+    if (e.surface === 'terminal' && n.isOn) {
+      // The last scene of the last session goes straight back up, before the first prompt.
+      const last = parseScene(await $.store.get(STORE_LAST))
+      if (last) {
+        kept.last = last
+        $.ui.invalidate('ui.render')
+      }
+    }
     await $.command.register({
       name: 'fables',
       description: 'Claude Fables: turn the cartoons above the prompt on or off, pick a style, or pick the model that writes them',
       argumentHint: '[on|off|style [name|off]|model [sonnet|haiku]]',
     })
-    $.clock.every(1000, () => void n.tick(host($, band, player)))
+    $.clock.every(1000, () => void n.tick(host($, band, kept)))
     return next(e)
   })
 
@@ -169,7 +195,7 @@ export const register: Register = (on, options) => {
     const px = /^pixel(?:\s+(on|off))?$/.exec(arg)
     if (px) return chooseLook($, n, px[1] === 'off' || (!px[1] && n.look === 'pixel') ? 'original' : 'pixel')
     const value = arg === 'on' ? true : arg === 'off' ? false : !n.isOn
-    await setOn($, n, host($, band, player), value)
+    await setOn($, n, host($, band, kept), kept, player, value)
     return {
       text: value
         ? `Claude Fables is on: cartoons written by ${MODEL_LABELS[n.model]} play above the prompt while Claude works.`
@@ -210,7 +236,7 @@ export const register: Register = (on, options) => {
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (e.surface === 'terminal') {
       if (e.props.hasSurvey) return next(e)
-      const current = await read($, scene)
+      const current = (await read($, scene)) ?? kept.last
       if (!current || !(await read($, enabled))) {
         void player.stop()
         return next(e)

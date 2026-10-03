@@ -16,7 +16,7 @@
       "type": "number",
       "title": "Terminal band rows",
       "description": "How many rows the cartoon takes above the prompt in a terminal; never more than the band has room for, less one.",
-      "default": 16
+      "default": 8
     },
     "chromiumPath": {
       "type": "string",

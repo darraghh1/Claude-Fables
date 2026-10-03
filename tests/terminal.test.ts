@@ -1,9 +1,10 @@
 import { describe, expect, mock, test } from 'claude-code/testing'
 import type { MockClock } from 'claude-code/testing'
-import type { On, RenderPropsOf } from 'claude-code'
+import type { ModelCompleteResult, On, RenderPropsOf } from 'claude-code'
 
 import type { FablesScene } from '../types'
 
+import { LINGER_MS } from '../hooks/director'
 import { DEFAULT_LOOK } from '../hooks/looks'
 import { TYPE_SECONDS_PER_CHAR } from '../hooks/scene'
 import { H, MAX_SVG, resumeAt, sceneToSvg } from '../hooks/svg'
@@ -39,16 +40,27 @@ function solid(columns: number, rows: number, rgb: number): string {
   return base64(new Uint8Array(words.buffer))
 }
 
-type Helper = (n: number, columns: number, rows: number) => AsyncGenerator<{ stream: 'stdout' | 'stderr'; text: string }, void>
+type Helper = (n: number, columns: number, rows: number, job: Record<string, unknown>) => AsyncGenerator<{ stream: 'stdout' | 'stderr'; text: string }, void>
 
 /**
  * The world under the mod: a clock, a store, the band's state, a helper
  * standing in for renderer/frames.ts, and a record of what reached the host.
  */
-function world(on: On, helper?: (clock: MockClock) => Helper, blitDeny?: string) {
+function world(on: On, helper?: (clock: MockClock) => Helper, blitDeny?: string, start: { state?: Record<string, unknown>; store?: Record<string, unknown> } = {}) {
   const clock = mock.clock(on, { now: 1_000_000 })
-  mock.store(on)
-  const state: Record<string, unknown> = { scene: SCENE, enabled: true, style: DEFAULT_LOOK }
+  // The mod's own store, in memory, kept here so a test can read what the mod stored.
+  const store: Record<string, unknown> = { ...start.store }
+  on('store.get', async (_$, e) => ({ value: store[e.key] }))
+  on('store.set', async (_$, e) => {
+    store[e.key] = e.value
+    return { value: undefined }
+  })
+  on('store.delete', async (_$, e) => {
+    delete store[e.key]
+    return { value: undefined }
+  })
+  on('store.keys', async () => ({ value: Object.keys(store) }))
+  const state: Record<string, unknown> = { scene: SCENE, enabled: true, style: DEFAULT_LOOK, ...start.state }
   const events: string[] = []
   const blits: string[] = []
   const logs: { text: string; to: unknown }[] = []
@@ -76,13 +88,13 @@ function world(on: On, helper?: (clock: MockClock) => Helper, blitDeny?: string)
     try {
       const columns = Number(jobs[n - 1]?.columns)
       const rows = Number(jobs[n - 1]?.rows)
-      if (run) yield* run(n, columns, rows)
+      if (run) yield* run(n, columns, rows, jobs[n - 1] ?? {})
     } finally {
       events.push(`end ${n}`)
     }
     return { value: { code: 0, signal: null } }
   })
-  return { clock, state, events, blits, logs, jobs }
+  return { clock, state, store, events, blits, logs, jobs }
 }
 
 /** A helper that is ready at once and draws a frame every twelfth of a second until it is stopped. */
@@ -98,6 +110,36 @@ const live =
       }
     }
 
+/** A helper that draws the frames its job asks for, one every twelfth of a second, and ends, as renderer/frames.ts does. */
+const finite =
+  (speaksAfter = 1.2): ((clock: MockClock) => Helper) =>
+  clock =>
+    async function* (_n, columns, rows, job) {
+      yield { stream: 'stdout', text: `{"ready":true,"columns":${columns},"rows":${rows},"speaksAfter":${speaksAfter}}\n` }
+      const count = Math.round(Number(job.fps) * Number(job.seconds))
+      for (let i = 0; i < count; i++) {
+        await clock.sleep(1000 / 12)
+        yield { stream: 'stdout', text: `${JSON.stringify({ i, t: i / 12, cells: solid(columns, rows, (0x203040 + i * 0x010101) & 0xffffff) })}\n` }
+      }
+    }
+
+const USAGE = { input_tokens: 1, output_tokens: 1, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 }
+
+/** The engine's side of a session beneath the mod: it starts, registers the command, takes prompts, ends turns, and the model answers SCENE. */
+function session(on: On): { asked: () => number } {
+  let asked = 0
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  on('command.register', (_, e) => ({ value: { command: e.name } }))
+  on('prompt.submit', (_, e) => ({ text: e.text }))
+  on('turn.complete', () => ({ text: 'done' }))
+  on('ui.render', ($, e) => $.ui.resolve(e).Text({ children: 'engine band' }))
+  on('model.complete', (): { value: ModelCompleteResult } => {
+    asked++
+    return { value: { isAnswered: true, text: JSON.stringify(SCENE), usage: USAGE } }
+  })
+  return { asked: () => asked }
+}
+
 /** The text inside the bubble's sides, row by row, of composed cells. */
 function bubbleText(cells: string, columns: number, rows: number): string[] {
   const out: string[] = []
@@ -109,26 +151,26 @@ function bubbleText(cells: string, columns: number, rows: number): string[] {
 }
 
 describe('the terminal band', () => {
-  test('draws one Raster keyed fables, as wide as the body and terminalRows tall', async ($, on) => {
+  test('draws one Raster keyed fables, as wide as the body and 8 rows tall by default', async ($, on) => {
     const w = world(on, live())
     const ui = await $.ui.mount({ plugin: 'fables', surface: 'terminal', component: 'AbovePrompt', props: band(200, 30) })
     const rasters = await ui.findAll({ type: 'Raster' })
     expect(rasters).toHaveLength(1)
     expect(rasters[0]?.key).toBe('fables')
-    expect(rasters[0]?.props).toMatchObject({ columns: 200, rows: 16 })
+    expect(rasters[0]?.props).toMatchObject({ columns: 200, rows: 8 })
     await w.clock.settle()
-    expect(w.jobs[0]).toMatchObject({ columns: 200, rows: 16, fps: 12 })
+    expect(w.jobs[0]).toMatchObject({ columns: 200, rows: 8, fps: 12 })
     expect(w.jobs[0]?.argv).toEqual(['bun', expect.stringContaining('/renderer/frames.ts')])
     await $.command.run({ command: 'fables', args: 'off' })
     await ui.unmount()
   })
 
-  test('asks the helper for the original look when the band is in pixel art (ISS-001), and for any other look as itself', async ($, on) => {
+  test('asks the helper for every look as itself, pixel art included (ISS-001 is fixed in the helper)', async ($, on) => {
     const w = world(on, live())
     expect(DEFAULT_LOOK).toBe('pixel')
     const ui = await $.ui.mount({ plugin: 'fables', surface: 'terminal', component: 'AbovePrompt', props: band(200, 30) })
     await w.clock.settle()
-    expect(w.jobs[0]?.look).toBe('original')
+    expect(w.jobs[0]?.look).toBe('pixel')
     w.state.style = 'ukiyoe'
     await ui.redraw()
     await w.clock.advance(500)
@@ -148,12 +190,14 @@ describe('the terminal band', () => {
     await ui.unmount()
   })
 
-  test('takes one row less than the band has when the band is short', async ($, on) => {
+  test('takes 8 rows whenever the band has room for 9, and one row less than the band has when it is short', async ($, on) => {
     world(on, live())
-    const ui = await $.ui.mount({ plugin: 'fables', surface: 'terminal', component: 'AbovePrompt', props: band(200, 10) })
-    expect((await ui.find({ type: 'Raster', key: 'fables' }))?.props).toMatchObject({ columns: 200, rows: 9 })
+    for (const [maxRows, rows] of [[9, 8], [10, 8], [40, 8], [8, 7], [5, 4]] as const) {
+      const ui = await $.ui.mount({ plugin: 'fables', surface: 'terminal', component: 'AbovePrompt', props: band(200, maxRows) })
+      expect((await ui.find({ type: 'Raster', key: 'fables' }))?.props).toMatchObject({ columns: 200, rows })
+      await ui.unmount()
+    }
     await $.command.run({ command: 'fables', args: 'off' })
-    await ui.unmount()
   })
 
   test('takes the config menu\'s terminalRows, and passes its chromiumPath to the helper', { options: { terminalRows: 12, chromiumPath: '/opt/chrome' } }, async ($, on) => {
@@ -190,11 +234,11 @@ describe('the terminal band', () => {
     await w.clock.advance(1100)
     const early = w.blits.at(-1)
     expect(early).toBeDefined()
-    const blank = bubbleText(early ?? '', 200, 16)
+    const blank = bubbleText(early ?? '', 200, 8)
     expect(blank).toHaveLength(wrap(SCENE.caption).length)
     expect(blank.every(line => line.trim() === '')).toBe(true)
     await w.clock.advance(400 + Math.ceil(SCENE.caption.length * TYPE_SECONDS_PER_CHAR * 1000))
-    const typed = bubbleText(w.blits.at(-1) ?? '', 200, 16)
+    const typed = bubbleText(w.blits.at(-1) ?? '', 200, 8)
     expect(typed).toEqual(wrap(SCENE.caption))
     expect(typed.join(' ')).toBe(SCENE.caption)
     expect(rowText(w.blits.at(-1) ?? '', 200, 0)).toContain(' field notes ')
@@ -275,6 +319,81 @@ describe('the terminal band', () => {
     expect(w.events).toContain('end 2')
     expect(w.logs.filter(l => l.to === 'debug')).toHaveLength(1)
     await ui.unmount()
+  })
+
+  test('keeps the last scene up and looping after the turn ends, with no helper and no model call, while the desktop band clears', async ($, on) => {
+    const w = world(on, finite(), undefined, { state: { scene: null } })
+    const engine = session(on)
+    await $.session.start({ cwd: '/work', surface: 'terminal', isInteractive: true })
+    await $.prompt.submit({ text: 'look for bugs', wait: false, origin: { kind: 'composer' } })
+    await w.clock.advance(1000)
+    expect(w.state.scene).toMatchObject({ caption: SCENE.caption })
+    expect(w.store.lastScene).toMatchObject({ caption: SCENE.caption })
+    const ui = await $.ui.mount({ plugin: 'fables', surface: 'terminal', component: 'AbovePrompt', props: band(200, 30) })
+    await $.turn.complete({ answer: 'done', durationMs: 1000, isAborted: false, turnId: 't1', reason: 'answer' })
+    const askedAtEnd = engine.asked()
+    expect(askedAtEnd).toBe(1)
+
+    await w.clock.advance(LINGER_MS + 5000)
+    // The Director has cleared the scene the desktop draws ...
+    expect(w.state.scene).toBeNull()
+    const desktop = await $.ui.mount({ plugin: 'fables', surface: 'desktop', component: 'AbovePrompt', props: band(200, 30) })
+    expect(await desktop.findAll({ type: 'Svg' })).toHaveLength(0)
+    await desktop.unmount()
+    // ... the terminal band still draws it, from the one helper that has drawn it and ended ...
+    await ui.redraw()
+    expect((await ui.find({ type: 'Raster', key: 'fables' }))?.props).toMatchObject({ columns: 200, rows: 8 })
+    expect(w.events).toEqual(['start 1', 'end 1'])
+    // ... and it keeps moving, on the clock alone: no helper open, no model asked.
+    const from = w.blits.length
+    await w.clock.advance(3000)
+    const idle = w.blits.slice(from)
+    expect(idle.length).toBeGreaterThan(12)
+    expect(new Set(idle).size).toBeGreaterThan(12)
+    expect(w.events).toEqual(['start 1', 'end 1'])
+    expect(w.jobs).toHaveLength(1)
+    expect(engine.asked()).toBe(askedAtEnd)
+
+    // /fables off clears the band and stops the loop.
+    await $.command.run({ command: 'fables', args: 'off' })
+    await ui.redraw()
+    expect(await ui.findAll({ type: 'Raster' })).toHaveLength(0)
+    const after = w.blits.length
+    await w.clock.advance(2000)
+    expect(w.blits).toHaveLength(after)
+    expect(w.store).not.toHaveProperty('lastScene')
+    await ui.unmount()
+  })
+
+  test('a new session draws the stored last scene before any prompt, with one helper', async ($, on) => {
+    const w = world(on, finite(), undefined, { state: { scene: null }, store: { lastScene: SCENE } })
+    const engine = session(on)
+    await $.session.start({ cwd: '/work', surface: 'terminal', isInteractive: true })
+    const ui = await $.ui.mount({ plugin: 'fables', surface: 'terminal', component: 'AbovePrompt', props: band(200, 30) })
+    expect(await ui.find({ type: 'Raster', key: 'fables' })).toBeDefined()
+    await w.clock.advance(1000)
+    expect(w.jobs).toHaveLength(1)
+    expect(w.jobs[0]).toMatchObject({ scene: { caption: SCENE.caption }, columns: 200, rows: 8, look: 'pixel' })
+    expect(w.blits.length).toBeGreaterThan(0)
+    expect(engine.asked()).toBe(0)
+    // Long after, it is still up and looping from what the one helper drew.
+    await w.clock.advance(LINGER_MS + 5000)
+    await ui.redraw()
+    expect(await ui.find({ type: 'Raster', key: 'fables' })).toBeDefined()
+    expect(w.events).toEqual(['start 1', 'end 1'])
+    await $.command.run({ command: 'fables', args: 'off' })
+    await ui.unmount()
+  })
+
+  test('a desktop session leaves the stored scene off the desktop band', async ($, on) => {
+    const w = world(on, finite(), undefined, { state: { scene: null }, store: { lastScene: SCENE } })
+    session(on)
+    await $.session.start({ cwd: '/work', surface: 'desktop', isInteractive: true })
+    const desktop = await $.ui.mount({ plugin: 'fables', surface: 'desktop', component: 'AbovePrompt', props: band(200, 30) })
+    expect(await desktop.findAll({ type: 'Svg' })).toHaveLength(0)
+    await w.clock.settle()
+    expect(w.jobs).toHaveLength(0)
+    await desktop.unmount()
   })
 
   test('composes a dark band with an empty bubble before any frame lands', () => {
