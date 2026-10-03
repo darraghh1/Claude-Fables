@@ -30,7 +30,7 @@
 > [!NOTE]
 > Claude Fables was developed entirely in Claude Code cloud environments and tested locally in the desktop app as well. Still, there may be bugs and rough edges. [Issues](https://github.com/henrik-thevibe/Claude-Fables/issues) and pull requests are very welcome.
 
-While Claude works, Fables watches each tool call it makes and each line it says. Every few seconds it asks Sonnet (or Haiku, if you prefer) to retell the latest moment as a scene. Bug hunts turn into nature documentaries and bad regexes get pulled over by the train police. Claude appears as a small orange critter walking, sneaking or flying through the story. When the turn ends there is a closing scene, and it stays up for 30 seconds.
+While Claude works, Fables watches each tool call it makes and each line it says. Every few seconds it asks Sonnet (or Haiku, if you prefer) to retell the latest moment as a scene. Bug hunts turn into nature documentaries and bad regexes get pulled over by the train police. Claude appears as a small orange critter walking, sneaking or flying through the story. When the turn ends there is a closing scene. On the desktop it stays up for 30 seconds; in the terminal it stays up, still moving, until the next one.
 
 - **A scene every few seconds:** each tool call and line Claude says becomes a moment in a story.
 - **20 actions:** Claude walks, sneaks, digs, trips, shrugs, sleeps and celebrates, matched to the work.
@@ -57,7 +57,7 @@ While Claude works, Fables watches each tool call it makes and each line it says
    To work on the mod with hot reload, also add `"CLAUDE_CODE_PLUGIN_DIR_WATCH": "1"`.
 3. Restart the desktop app and give Claude a task in the Code tab. The cartoon appears above the prompt after the first few seconds.
 
-To try it from the terminal for one session instead, run `claude --plugin-dir ~/code/Claude-Fables`. Note that in the terminal the mod only watches and draws nothing.
+To try it from the terminal for one session instead, run `claude --plugin-dir ~/code/Claude-Fables`. The terminal band needs bun and Chromium on the machine (see [Terminal](#terminal)).
 
 ## How it works
 
@@ -79,7 +79,7 @@ tool calls, Claude's own words ──► activity log (last 14 lines)
 
 - **The model writes data, not code.** Each scene is a small declarative JSON object: a backdrop, Claude's action, particles, a caption and its tone. `hooks/scene.ts` validates it strictly: unknown fields are dropped, numbers clamped, strings flattened and cut, and colors must be 3- or 6-digit hex. A bad reply can't break anything; it just doesn't show.
 - **The animation runs inside the SVG.** `hooks/svg.ts` compiles a scene into one SVG document that animates itself with SMIL: walk cycles, bobbing, scrolling trains, twinkling stars, and a speech bubble that types itself out. Once the scene is drawn, the desktop needs no redraws for it.
-- **Every line gets read.** Scenes play from a queue, one at a time. Each one stays up until its bubble has typed out and been on screen long enough to read, which takes longer for a longer caption. Nothing cuts in: not a failure, not the end of the turn, not the next prompt. The narrator asks for the next scene a little before the current one is read, timed to how quickly the model has been answering, so it is ready on time. A scene that comes back early waits in the queue. News (a failure, the turn ending) is asked for straight away and joins the queue behind the current scene. The narrator is told what the hero has just said, so the news breaks in within the story ("Wait-", "Oh!") rather than on screen. When a new prompt comes in, the scene that is up is still read through, and a closing scene still on its way plays before the new story starts. Once a turn is over, its last scene stays up for 30 seconds, then the band clears.
+- **Every line gets read.** Scenes play from a queue, one at a time. Each one stays up until its bubble has typed out and been on screen long enough to read, which takes longer for a longer caption. Nothing cuts in: not a failure, not the end of the turn, not the next prompt. The narrator asks for the next scene a little before the current one is read, timed to how quickly the model has been answering, so it is ready on time. A scene that comes back early waits in the queue. News (a failure, the turn ending) is asked for straight away and joins the queue behind the current scene. The narrator is told what the hero has just said, so the news breaks in within the story ("Wait-", "Oh!") rather than on screen. When a new prompt comes in, the scene that is up is still read through, and a closing scene still on its way plays before the new story starts. Once a turn is over, its last scene stays up for 30 seconds, then the desktop band clears. The terminal band keeps it.
 
 <details>
 <summary><b>Under the hood:</b> queueing, smooth changes, caption fit, limits, sizing</summary>
@@ -88,7 +88,7 @@ tool calls, Claude's own words ──► activity log (last 14 lines)
 - **Captions fit the bubble.** The narrator is asked for at most 70 characters. The hard limit is 80, the most the bubble shows whole in four lines. A longer caption is cut after its last full sentence, or else after a whole word with an ellipsis, never mid-word. The bubble always shows every word it is given.
 - **It has limits.** Only one model request runs at a time, scenes come at least 5 seconds apart, and after errors it backs off exponentially, up to 60 seconds. The prompt is always bounded (the last 14 activity lines and the last 4 scenes), so a long session can't outgrow the context window.
 - **It fits the window.** The band always gets a cartoon as wide as it is and 192 px tall. A wider window shows more of the scene, not a bigger one, so the art and the text stay the same size. Resizing the window redraws it.
-- **Desktop only.** In the terminal the band is left exactly as the engine draws it.
+- **Two surfaces, drawn apart.** The desktop band is an animated SVG; the terminal band is cells (see [Terminal](#terminal)). A change to one leaves the other as it was.
 
 </details>
 
@@ -133,7 +133,9 @@ In a terminal, the same scenes play above the prompt as coloured half-block cell
 - **Chromium** (or Chrome). The config menu's **Chromium** (`pluginConfigs.fables.chromiumPath`) names it when it is not `chromium` on `PATH`.
 - **A 24-bit-colour terminal.** Inside tmux, Claude Code falls back to 256 colours and the art turns to grey smudges; start it with `CLAUDE_CODE_TMUX_TRUECOLOR=1` (and let tmux pass true colour through to your terminal, `set -as terminal-features ',*:RGB'`).
 
-The default Pixel Art style is drawn from the original look in the terminal, whose half blocks are pixels already. The band takes 16 rows, or one less than it has room for; **Terminal band rows** (`pluginConfigs.fables.terminalRows`) changes that. Without bun or Chromium, or when no frame arrives within 5 seconds, the band shows the caption as text in a box and writes the reason once to the debug log.
+Every style draws as itself, the default Pixel Art included. The band takes 8 rows, or one less than it has room for; **Terminal band rows** (`pluginConfigs.fables.terminalRows`) changes that. Without bun or Chromium, or when no frame arrives within 5 seconds, the band shows the caption as text in a box and writes the reason once to the debug log.
+
+The terminal band is always on. Once a scene's frames are drawn the helper ends, and the band loops the scene's last 2 seconds from the frames it kept, with no helper and no model call, until the next scene comes. The last scene is remembered, so a new session opens with it on the band before the first prompt. `/fables off` clears the band and forgets the scene.
 
 ## The scenes
 

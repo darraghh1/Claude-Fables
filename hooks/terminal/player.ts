@@ -4,6 +4,10 @@
  * the frames it streams, and repaints the band's Raster at 12 frames a second
  * with the caption and title written over them (compose.ts).
  *
+ * Once the helper has drawn the scene and ended, the band keeps playing: its
+ * last LOOP_SECONDS loop from the frames kept, on the clock alone, with no
+ * helper running, until a new scene, a new box or `/fables off`.
+ *
  * One helper at a time: a new scene, a new box, `/fables off` and the module
  * unloading each end the running one first (M-05). When the helper cannot run
  * (no bun, no Chromium, an error line, no frame within 5 s) the band falls back
@@ -51,15 +55,6 @@ export type PlayerHost = {
 export type Want = { scene: FablesScene; columns: number; rows: number; look: string; requestId: string }
 
 type Line = { ready: true; speaksAfter: number } | { i: number; cells: string } | { error: string }
-
-/**
- * The style the helper draws a look in. Pixel art (the default) pixelizes the
- * stage with an SVG filter that Chromium draws as a flat, near-black stage
- * when the frame helper decodes it as an image (ISS-001);
- * the terminal's half blocks are pixels already, so it draws the original
- * look, which pixel art is made from. Every other look draws as itself.
- */
-export const terminalLook = (look: string): string => (look === 'pixel' ? 'original' : look)
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null
 
@@ -202,7 +197,7 @@ export class Player {
     for (const wait of waits) wait.cancel()
     if (!isPreviousEnded) host.log('fables: the last frame helper had not ended; starting the next')
     if (generation !== this.generation) return
-    const job = { scene: want.scene, columns: want.columns, rows: want.rows, look: terminalLook(want.look), fps: FPS, seconds: this.count / FPS }
+    const job = { scene: want.scene, columns: want.columns, rows: want.rows, look: want.look, fps: FPS, seconds: this.count / FPS }
     const stream = host.spawn({
       argv: ['bun', `${host.root}/renderer/frames.ts`],
       input: JSON.stringify(job),
