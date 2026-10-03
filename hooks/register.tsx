@@ -253,8 +253,10 @@ export const register: Register = (on, options) => {
           </Box>
         )
       }
-      const cells = player.cellsAt(await $.clock.now()) ?? ''
+      const cells = player.cellsAt(await $.clock.now())
       player.drawn(cells)
+      // No picture yet (the session has just started, the first helper is still drawing): the engine's own band.
+      if (cells === undefined) return next(e)
       return <Raster key={RASTER_KEY} columns={columns} rows={rows} cells={cells} />
     }
     if (e.surface !== 'desktop' || e.props.hasSurvey) return next(e)

@@ -17,6 +17,11 @@
  *    least 2× that of main@4e9ffca's helper with the original look; gradient energy is printed
  *    beside it. The baseline helper is extracted from git into a temp dir, once per machine.
  *
+ * 9. Seamless loop: on SAMPLES[0], [3] and [5] at 220×8, rendered as the band asks (12 fps, its
+ *    reading time, no entrance), the wrap from the final frame to the loop's start
+ *    (hooks/terminal/loop.ts:loopStart) differs by at most 1.5× the median step between
+ *    consecutive frames in the loop; both numbers are printed.
+ *
  * Exits 0 when all hold; otherwise prints every failure and exits 1.
  */
 
@@ -26,6 +31,9 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 
 import { LOOK_NAMES } from '../hooks/looks'
+import { readMs } from '../hooks/narrator'
+import { decode } from '../hooks/terminal/compose'
+import { distance, loopStart } from '../hooks/terminal/loop'
 import { parseScene } from '../hooks/scene'
 import { SAMPLES } from '../scripts/samples'
 import { HALF_BLOCK } from './cells'
@@ -340,6 +348,41 @@ async function sharper() {
   })
 }
 
+// ---------------------------------------------------------------- 9. a seamless loop
+
+const MAX_SEAM = 1.5
+
+async function seamlessLoop() {
+  const columns = 220
+  const rows = 8
+  const samples = [0, 3, 5]
+  const results = await pool(samples, 3, async sample => {
+    const scene = parseScene(SAMPLES[sample])
+    const seconds = scene ? Math.max(1, Math.ceil(readMs({ caption: scene.caption }) / 1000)) : 1
+    const lines: string[] = []
+    const { code, stderr } = await run(start(process.env, JSON.stringify({ scene: { ...scene, enter: undefined }, columns, rows, look: 'pixel', fps: FPS, seconds })), line => lines.push(line))
+    const frames = lines
+      .map(l => JSON.parse(l) as unknown)
+      .filter(isRecord)
+      .flatMap(f => (typeof f.cells === 'string' ? [decode(f.cells)] : []))
+      .filter(f => f !== undefined)
+    return { code, stderr, frames, count: FPS * seconds }
+  })
+  samples.forEach((sample, k) => {
+    const { code, stderr, frames, count } = results[k]!
+    if (code !== 0 || frames.length !== count) {
+      check(false, `seam: SAMPLES[${sample}] renders ${count} frames (got ${frames.length}, exit ${code}${stderr ? `: ${stderr.trim()}` : ''})`)
+      return
+    }
+    const from = loopStart(frames, FPS)
+    const seam = distance(frames[count - 1]!, frames[from]!)
+    const steps = frames.slice(from + 1).map((f, i) => distance(frames[from + i]!, f)).sort((a, b) => a - b)
+    const median = steps.length ? steps[Math.floor(steps.length / 2)]! : 0
+    console.log(`seam SAMPLES[${sample}] at 220×8: loop frames ${from}–${count - 1} of ${count}; seam ${seam} vs median step ${median} (${median ? fixed(seam / median, 2) : '—'}×)`)
+    check(seam <= MAX_SEAM * median, `seam: SAMPLES[${sample}] wraps within ${MAX_SEAM}× its median frame step (seam ${seam}, median ${median})`)
+  })
+}
+
 await fullRender()
 await terminated()
 await missingBrowser()
@@ -348,6 +391,7 @@ await pixelEverySize()
 await pixelExact()
 await croppedNotZoomed()
 await sharper()
+await seamlessLoop()
 if (failures.length) {
   console.log(`\n${failures.length} failed`)
   process.exit(1)

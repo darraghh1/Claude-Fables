@@ -8,7 +8,11 @@ import { LINGER_MS } from '../hooks/director'
 import { DEFAULT_LOOK } from '../hooks/looks'
 import { TYPE_SECONDS_PER_CHAR } from '../hooks/scene'
 import { H, MAX_SVG, resumeAt, sceneToSvg } from '../hooks/svg'
-import { compose, rowText, wrap } from '../hooks/terminal/compose'
+import { compose, DARK, decode, rowText, wrap } from '../hooks/terminal/compose'
+import { loopStart, MIN_LOOP_SECONDS } from '../hooks/terminal/loop'
+import { FPS } from '../hooks/terminal/player'
+import { readMs } from '../hooks/narrator'
+import { ENTRANCE_SECONDS } from '../hooks/scene'
 import { base64 } from '../renderer/cells'
 
 const SCENE: FablesScene = {
@@ -60,9 +64,13 @@ function world(on: On, helper?: (clock: MockClock) => Helper, blitDeny?: string,
     return { value: undefined }
   })
   on('store.keys', async () => ({ value: Object.keys(store) }))
+  // The engine's own band, which the mod passes to until it has a picture.
+  on('ui.render', ($, e) => $.ui.resolve(e).Text({ children: 'engine band' }))
   const state: Record<string, unknown> = { scene: SCENE, enabled: true, style: DEFAULT_LOOK, ...start.state }
   const events: string[] = []
   const blits: string[] = []
+  /** When each blit landed, by the mock clock. */
+  const blitAt: number[] = []
   const logs: { text: string; to: unknown }[] = []
   const jobs: Record<string, unknown>[] = []
   let versions = 1
@@ -72,7 +80,10 @@ function world(on: On, helper?: (clock: MockClock) => Helper, blitDeny?: string,
     return { value: { isSet: true, version: ++versions } }
   })
   on('ui.blit', async (_$, e) => {
-    if ('cells' in e) blits.push(e.cells)
+    if ('cells' in e) {
+      blits.push(e.cells)
+      blitAt.push(clock.now())
+    }
     return { value: blitDeny === undefined ? {} : { deny: blitDeny } }
   })
   on('ui.log', async (_$, e) => {
@@ -94,7 +105,7 @@ function world(on: On, helper?: (clock: MockClock) => Helper, blitDeny?: string,
     }
     return { value: { code: 0, signal: null } }
   })
-  return { clock, state, store, events, blits, logs, jobs }
+  return { clock, state, store, events, blits, blitAt, logs, jobs }
 }
 
 /** A helper that is ready at once and draws a frame every twelfth of a second until it is stopped. */
@@ -132,7 +143,6 @@ function session(on: On): { asked: () => number } {
   on('command.register', (_, e) => ({ value: { command: e.name } }))
   on('prompt.submit', (_, e) => ({ text: e.text }))
   on('turn.complete', () => ({ text: 'done' }))
-  on('ui.render', ($, e) => $.ui.resolve(e).Text({ children: 'engine band' }))
   on('model.complete', (): { value: ModelCompleteResult } => {
     asked++
     return { value: { isAnswered: true, text: JSON.stringify(SCENE), usage: USAGE } }
@@ -154,6 +164,8 @@ describe('the terminal band', () => {
   test('draws one Raster keyed fables, as wide as the body and 8 rows tall by default', async ($, on) => {
     const w = world(on, live())
     const ui = await $.ui.mount({ plugin: 'fables', surface: 'terminal', component: 'AbovePrompt', props: band(200, 30) })
+    await w.clock.advance(200)
+    await ui.redraw()
     const rasters = await ui.findAll({ type: 'Raster' })
     expect(rasters).toHaveLength(1)
     expect(rasters[0]?.key).toBe('fables')
@@ -191,9 +203,11 @@ describe('the terminal band', () => {
   })
 
   test('takes 8 rows whenever the band has room for 9, and one row less than the band has when it is short', async ($, on) => {
-    world(on, live())
+    const w = world(on, live())
     for (const [maxRows, rows] of [[9, 8], [10, 8], [40, 8], [8, 7], [5, 4]] as const) {
       const ui = await $.ui.mount({ plugin: 'fables', surface: 'terminal', component: 'AbovePrompt', props: band(200, maxRows) })
+      await w.clock.advance(200)
+      await ui.redraw()
       expect((await ui.find({ type: 'Raster', key: 'fables' }))?.props).toMatchObject({ columns: 200, rows })
       await ui.unmount()
     }
@@ -203,6 +217,8 @@ describe('the terminal band', () => {
   test('takes the config menu\'s terminalRows, and passes its chromiumPath to the helper', { options: { terminalRows: 12, chromiumPath: '/opt/chrome' } }, async ($, on) => {
     const w = world(on, live())
     const ui = await $.ui.mount({ plugin: 'fables', surface: 'terminal', component: 'AbovePrompt', props: band(200, 30) })
+    await w.clock.advance(200)
+    await ui.redraw()
     expect((await ui.find({ type: 'Raster', key: 'fables' }))?.props).toMatchObject({ rows: 12 })
     await w.clock.settle()
     expect(w.jobs[0]?.env).toEqual({ CHROMIUM: '/opt/chrome' })
@@ -262,7 +278,7 @@ describe('the terminal band', () => {
     await ui.unmount()
   })
 
-  test('two identical frames in a row repaint the band once', async ($, on) => {
+  test('two identical frames in a row go up once, in the redraw that puts the Raster up, and are never blitted', async ($, on) => {
     const w = world(on, clock =>
       async function* (_n, columns, rows) {
         yield { stream: 'stdout', text: `{"ready":true,"columns":${columns},"rows":${rows},"speaksAfter":100}\n` }
@@ -274,7 +290,9 @@ describe('the terminal band', () => {
     )
     const ui = await $.ui.mount({ plugin: 'fables', surface: 'terminal', component: 'AbovePrompt', props: band(120, 30) })
     await w.clock.advance(250)
-    expect(w.blits).toHaveLength(1)
+    await ui.redraw()
+    expect(await ui.find({ type: 'Raster', key: 'fables' })).toBeDefined()
+    expect(w.blits).toHaveLength(0)
     await $.command.run({ command: 'fables', args: 'off' })
     await ui.unmount()
   })
@@ -313,7 +331,9 @@ describe('the terminal band', () => {
     w.state.scene = OTHER
     await ui.redraw()
     await w.clock.advance(1000)
-    expect(await ui.find({ type: 'Raster', key: 'fables' })).toBeDefined()
+    // No picture has landed in this session: the engine's own band, not a dark one.
+    expect(await ui.findAll({ type: 'Raster' })).toHaveLength(0)
+    expect(await ui.find({ type: 'Text', text: 'engine band' })).toBeDefined()
     await w.clock.advance(4500)
     expect(await ui.find({ type: 'Text', text: OTHER.caption })).toBeDefined()
     expect(w.events).toContain('end 2')
@@ -349,7 +369,8 @@ describe('the terminal band', () => {
     await w.clock.advance(3000)
     const idle = w.blits.slice(from)
     expect(idle.length).toBeGreaterThan(12)
-    expect(new Set(idle).size).toBeGreaterThan(12)
+    // The synthetic frames ramp one way, so the least-different start allowed makes the shortest loop, 1 s.
+    expect(new Set(idle).size).toBeGreaterThanOrEqual(12)
     expect(w.events).toEqual(['start 1', 'end 1'])
     expect(w.jobs).toHaveLength(1)
     expect(engine.asked()).toBe(askedAtEnd)
@@ -370,8 +391,9 @@ describe('the terminal band', () => {
     const engine = session(on)
     await $.session.start({ cwd: '/work', surface: 'terminal', isInteractive: true })
     const ui = await $.ui.mount({ plugin: 'fables', surface: 'terminal', component: 'AbovePrompt', props: band(200, 30) })
-    expect(await ui.find({ type: 'Raster', key: 'fables' })).toBeDefined()
     await w.clock.advance(1000)
+    await ui.redraw()
+    expect(await ui.find({ type: 'Raster', key: 'fables' })).toBeDefined()
     expect(w.jobs).toHaveLength(1)
     expect(w.jobs[0]).toMatchObject({ scene: { caption: SCENE.caption }, columns: 200, rows: 8, look: 'pixel' })
     expect(w.blits.length).toBeGreaterThan(0)
@@ -399,5 +421,154 @@ describe('the terminal band', () => {
   test('composes a dark band with an empty bubble before any frame lands', () => {
     const cells = compose(undefined, 80, 12, { scene: SCENE, t: 0, speaksAfter: undefined })
     expect(bubbleText(cells, 80, 12).every(line => line.trim() === '')).toBe(true)
+  })
+
+  test('holds the last scene, art and caption, until the next scene\'s first frame lands, then swaps both, and never draws the dark band', async ($, on) => {
+    const firstAt: Record<number, number> = {}
+    const w = world(on, clock => async function* (n, columns, rows, job) {
+      yield { stream: 'stdout', text: `{"ready":true,"columns":${columns},"rows":${rows},"speaksAfter":0.2}\n` }
+      if (n === 2) await clock.sleep(1500)
+      const count = Math.round(Number(job.fps) * Number(job.seconds))
+      for (let i = 0; i < count; i++) {
+        await clock.sleep(1000 / 12)
+        if (i === 0) firstAt[n] = clock.now()
+        yield { stream: 'stdout', text: `${JSON.stringify({ i, t: i / 12, cells: solid(columns, rows, n === 1 ? 0x204000 + i : 0x60a000 + i) })}\n` }
+      }
+    })
+    const ui = await $.ui.mount({ plugin: 'fables', surface: 'terminal', component: 'AbovePrompt', props: band(200, 30) })
+    await w.clock.advance(3000)
+    const startedAt = w.clock.now()
+    w.state.scene = OTHER
+    await ui.redraw()
+    await w.clock.advance(3000)
+    const lands = firstAt[2]!
+    expect(lands - startedAt).toBeGreaterThanOrEqual(1500)
+    /** The art's colour in the band's bottom-right cell, clear of the bubble and the title. */
+    const art = (cells: string) => decode(cells)![(8 * 200 - 1) * 3 + 1]! >>> 8
+    const held = w.blits.filter((_, k) => w.blitAt[k]! >= startedAt && w.blitAt[k]! < lands)
+    expect(held.length).toBeGreaterThan(6)
+    for (const cells of held) {
+      expect(art(cells)).toBe(0x2040)
+      expect(rowText(cells, 200, 0)).toContain(' field notes ')
+      expect(bubbleText(cells, 200, 8)).toHaveLength(wrap(SCENE.caption).length)
+    }
+    const k = w.blitAt.findIndex(at => at >= lands)
+    const swapped = w.blits[k]!
+    expect(art(swapped)).toBe(0x60a0)
+    expect(rowText(swapped, 200, 0)).not.toContain(' field notes ')
+    expect(bubbleText(swapped, 200, 8)).toHaveLength(wrap(OTHER.caption).length)
+    for (const cells of w.blits) expect(decode(cells)!.some((word, i) => i % 3 !== 0 && word === DARK)).toBe(false)
+    await $.command.run({ command: 'fables', args: 'off' })
+    await ui.unmount()
+  })
+
+  test('at session start with a stored scene, passes to the engine\'s band until the first frame lands, then draws the Raster', async ($, on) => {
+    const w = world(
+      on,
+      clock => async function* (_n, columns, rows) {
+        yield { stream: 'stdout', text: `{"ready":true,"columns":${columns},"rows":${rows},"speaksAfter":1}\n` }
+        await clock.sleep(2500)
+        yield { stream: 'stdout', text: `${JSON.stringify({ i: 0, t: 0, cells: solid(columns, rows, 0x336699) })}\n` }
+        await clock.sleep(60_000)
+      },
+      undefined,
+      { state: { scene: null }, store: { lastScene: SCENE } },
+    )
+    session(on)
+    await $.session.start({ cwd: '/work', surface: 'terminal', isInteractive: true })
+    const ui = await $.ui.mount({ plugin: 'fables', surface: 'terminal', component: 'AbovePrompt', props: band(200, 30) })
+    await w.clock.advance(2000)
+    await ui.redraw()
+    expect(w.jobs).toHaveLength(1)
+    expect(await ui.findAll({ type: 'Raster' })).toHaveLength(0)
+    expect(await ui.find({ type: 'Text', text: 'engine band' })).toBeDefined()
+    expect(w.blits).toHaveLength(0)
+    await w.clock.advance(1000)
+    await ui.redraw()
+    const raster = await ui.find({ type: 'Raster', key: 'fables' })
+    expect(raster?.props).toMatchObject({ columns: 200, rows: 8 })
+    await $.command.run({ command: 'fables', args: 'off' })
+    await ui.unmount()
+  })
+
+  test('cross-fades from the last picture on a backdrop change, and asks the helper for the scene without its entrance', async ($, on) => {
+    const firstAt: Record<number, number> = {}
+    const FROM = 0x204060
+    const TO = 0xa0c0e0
+    const w = world(on, clock => async function* (n, columns, rows, job) {
+      yield { stream: 'stdout', text: `{"ready":true,"columns":${columns},"rows":${rows},"speaksAfter":0.2}\n` }
+      if (n === 2) await clock.sleep(1500)
+      const count = Math.round(Number(job.fps) * Number(job.seconds))
+      for (let i = 0; i < count; i++) {
+        await clock.sleep(1000 / 12)
+        if (i === 0) firstAt[n] = clock.now()
+        yield { stream: 'stdout', text: `${JSON.stringify({ i, t: i / 12, cells: solid(columns, rows, n === 1 ? FROM : TO) })}\n` }
+      }
+    })
+    const ui = await $.ui.mount({ plugin: 'fables', surface: 'terminal', component: 'AbovePrompt', props: band(200, 30) })
+    await w.clock.advance(3000)
+    w.state.scene = { ...OTHER, enter: 'fade' }
+    await ui.redraw()
+    await w.clock.advance(1590)
+    const lands = firstAt[2]!
+    expect(lands).toBeDefined()
+    const art = (cells: string) => decode(cells)![(8 * 200 - 1) * 3 + 1]!
+    const between = (c: number) => [16, 8, 0].every(sh => ((c >>> sh) & 0xff) > ((FROM >>> sh) & 0xff) && ((c >>> sh) & 0xff) < ((TO >>> sh) & 0xff))
+    // The midpoint, drawn at exactly half the entrance after the first frame went up.
+    await w.clock.set(lands + (ENTRANCE_SECONDS * 1000) / 2)
+    await ui.redraw()
+    const mid = (await ui.find({ type: 'Raster', key: 'fables' }))?.props
+    const midCells = typeof mid?.cells === 'string' ? mid.cells : ''
+    expect(between(art(midCells))).toBe(true)
+    const half = art(midCells)
+    for (const sh of [16, 8, 0]) expect(Math.abs(((half >>> sh) & 0xff) - (((FROM >>> sh) & 0xff) + ((TO >>> sh) & 0xff)) / 2)).toBeLessThanOrEqual(2)
+    await w.clock.advance(2000)
+    const fading = w.blits.filter((_, k) => w.blitAt[k]! > lands + 50 && w.blitAt[k]! < lands + ENTRANCE_SECONDS * 1000 - 50)
+    expect(fading.length).toBeGreaterThan(3)
+    for (const cells of fading) expect(between(art(cells))).toBe(true)
+    const after = w.blits.filter((_, k) => w.blitAt[k]! > lands + ENTRANCE_SECONDS * 1000 + 100)
+    expect(after.length).toBeGreaterThan(0)
+    for (const cells of after) expect(art(cells)).toBe(TO)
+    expect(w.jobs[1]?.scene).toMatchObject({ backdrop: 'city', caption: OTHER.caption })
+    expect(w.jobs[1]?.scene).not.toHaveProperty('enter')
+    await $.command.run({ command: 'fables', args: 'off' })
+    await ui.unmount()
+  })
+
+  test('loops from the frame after the one least different from the last, and never loops less than 1 s', async ($, on) => {
+    const count = FPS * Math.max(1, Math.ceil(readMs(SCENE) / 1000))
+    const k = count - 30
+    const colour = (i: number) => (i === k ? 0x0f0000 + (count - 1) : 0x0f0000 + i) * 0x100
+    const firstAt: number[] = []
+    const w = world(on, clock => async function* (_n, columns, rows) {
+      yield { stream: 'stdout', text: `{"ready":true,"columns":${columns},"rows":${rows},"speaksAfter":0.2}\n` }
+      for (let i = 0; i < count; i++) {
+        await clock.sleep(1000 / 12)
+        if (i === 0) firstAt.push(clock.now())
+        yield { stream: 'stdout', text: `${JSON.stringify({ i, t: i / 12, cells: solid(columns, rows, colour(i) & 0xffffff) })}\n` }
+      }
+    })
+    const ui = await $.ui.mount({ plugin: 'fables', surface: 'terminal', component: 'AbovePrompt', props: band(200, 30) })
+    await w.clock.advance(count * 100 + 1000)
+    const art = async (frame: number) => {
+      await w.clock.set(firstAt[0]! + ((frame + 0.5) * 1000) / FPS)
+      await ui.redraw()
+      const props = (await ui.find({ type: 'Raster', key: 'fables' }))?.props
+      return decode(typeof props?.cells === 'string' ? props.cells : '')![(8 * 200 - 1) * 3 + 1]!
+    }
+    // The last frame, then the wrap: the frame after k, not the 2 s-back frame the old loop took.
+    expect(await art(count + 3 * (count - k - 1) - 1)).toBe(colour(count - 1) & 0xffffff)
+    expect(await art(count + 3 * (count - k - 1))).toBe(colour(k + 1) & 0xffffff)
+    // Pure: the loop starts right after k; a match inside the last second is not taken.
+    const frame = (c: number) => new Uint32Array([0x2580, c, c])
+    const synthetic = Array.from({ length: 60 }, (_, i) => frame(i * 3))
+    synthetic[40] = frame(59 * 3)
+    expect(loopStart(synthetic, 12)).toBe(41)
+    synthetic[55] = frame(59 * 3)
+    expect(loopStart(synthetic, 12)).toBe(41)
+    expect(60 - loopStart(synthetic, 12)).toBeGreaterThanOrEqual(MIN_LOOP_SECONDS * 12)
+    expect(loopStart(synthetic.slice(0, 8), 12)).toBe(0)
+    await $.command.run({ command: 'fables', args: 'off' })
+    await ui.unmount()
   })
 })

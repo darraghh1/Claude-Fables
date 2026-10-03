@@ -1,7 +1,9 @@
 /**
  * The terminal band's picture, cell by cell: a frame from the helper
- * (renderer/frames.ts), or a dark one until the first lands, with the chapter
- * tag and the caption's bubble written over it as text cells.
+ * (renderer/frames.ts), resized or cross-faded as the player asks, with the
+ * chapter tag and the caption's bubble written over it as text cells. The dark
+ * band for no frame is a fallback the player never asks for: it draws nothing
+ * until a picture has landed.
  *
  * Pure, with no I/O and no host globals: the Player (player.ts) and the tests
  * call it with a frame and a time.
@@ -106,23 +108,66 @@ function unbase64(text: string): Uint8Array | undefined {
   return out
 }
 
-/** A frame's cells as words `[codePoint, fg, bg]` per cell; a dark band when there is no frame, or it is not this box's. */
-function decodeCells(cells: string | undefined, columns: number, rows: number): Uint32Array {
-  const size = columns * rows * 3
-  const bytes = cells === undefined ? undefined : unbase64(cells)
-  if (bytes && bytes.length === size * 4) {
-    const words = new Uint32Array(size)
-    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
-    for (let i = 0; i < size; i++) words[i] = view.getUint32(i * 4, true)
-    return words
-  }
-  const words = new Uint32Array(size)
-  for (let i = 0; i < size; i += 3) {
-    words[i] = 0x20
-    words[i + 1] = DARK
-    words[i + 2] = DARK
-  }
+/** Raster cells as words `[codePoint, fg, bg]` per cell; undefined when they are not whole cells of base64. */
+export function decode(cells: string): Uint32Array | undefined {
+  const bytes = unbase64(cells)
+  if (!bytes || bytes.length === 0 || bytes.length % 12 !== 0) return undefined
+  const words = new Uint32Array(bytes.length / 4)
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+  for (let i = 0; i < words.length; i++) words[i] = view.getUint32(i * 4, true)
   return words
+}
+
+/** Cells of a `fromColumns × fromRows` box redrawn in a `columns × rows` one, nearest cell, so a held picture fits a resized band. */
+export function fit(words: Uint32Array, fromColumns: number, fromRows: number, columns: number, rows: number): Uint32Array {
+  if (fromColumns === columns && fromRows === rows) return words
+  const out = new Uint32Array(columns * rows * 3)
+  for (let y = 0; y < rows; y++) {
+    const sy = Math.min(fromRows - 1, Math.floor(((y + 0.5) * fromRows) / rows))
+    for (let x = 0; x < columns; x++) {
+      const sx = Math.min(fromColumns - 1, Math.floor(((x + 0.5) * fromColumns) / columns))
+      out.set(words.subarray((sy * fromColumns + sx) * 3, (sy * fromColumns + sx) * 3 + 3), (y * columns + x) * 3)
+    }
+  }
+  return out
+}
+
+/** One 0xRRGGBB colour `a` of the way from `from` to `to`. */
+function mix(from: number, to: number, a: number): number {
+  let out = 0
+  for (const shift of [16, 8, 0]) {
+    const f = (from >>> shift) & 0xff
+    const t = (to >>> shift) & 0xff
+    out |= Math.round(f + (t - f) * a) << shift
+  }
+  return out
+}
+
+/** Cells `a` (0 to 1) of the way from `from` to `to`, colour by colour: the band's cross-fade. Both are one box's. */
+export function blend(from: Uint32Array, to: Uint32Array, a: number): Uint32Array {
+  if (from.length !== to.length) return to
+  const k = Math.max(0, Math.min(1, a))
+  const out = new Uint32Array(to.length)
+  for (let i = 0; i < to.length; i += 3) {
+    out[i] = k < 0.5 ? from[i]! : to[i]!
+    out[i + 1] = mix(from[i + 1]!, to[i + 1]!, k)
+    out[i + 2] = mix(from[i + 2]!, to[i + 2]!, k)
+  }
+  return out
+}
+
+/** A frame's cells as words; a dark band when there is no frame, or it is not this box's. */
+function decodeCells(cells: string | Uint32Array | undefined, columns: number, rows: number): Uint32Array {
+  const size = columns * rows * 3
+  const words = typeof cells === 'string' ? decode(cells) : cells
+  if (words && words.length === size) return Uint32Array.from(words)
+  const dark = new Uint32Array(size)
+  for (let i = 0; i < size; i += 3) {
+    dark[i] = 0x20
+    dark[i + 1] = DARK
+    dark[i + 2] = DARK
+  }
+  return dark
 }
 
 function encodeCells(words: Uint32Array): string {
@@ -168,10 +213,11 @@ export function typedChars(t: number, speaksAfter: number | undefined): number {
 }
 
 /**
- * The cells the band shows: `frame` (or a dark band) with the title top-left
+ * The cells the band shows: `frame` (raw cells or their words; a dark band
+ * when there is none) with the title top-left
  * and the bubble beside Claude, its caption typed out so far.
  */
-export function compose(frame: string | undefined, columns: number, rows: number, overlay: Overlay): string {
+export function compose(frame: string | Uint32Array | undefined, columns: number, rows: number, overlay: Overlay): string {
   const words = decodeCells(frame, columns, rows)
   const { scene } = overlay
   const { x, y, lines, width } = bubbleAt(scene, columns, rows)
