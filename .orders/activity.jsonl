@@ -167,3 +167,10 @@
 {"at":"2026-10-03T00:57:21.821Z","actor":"darragh","verb":"bp order findings append","id":"WO-004","path":"orders/WO-004.findings.md"}
 {"at":"2026-10-03T00:57:55.597Z","actor":"8724e666-3b9f-47cd-a9c8-c45af498d5d3","verb":"bp order set","id":"WO-004","path":"orders/WO-004.md","from":"in-progress","to":"review"}
 {"at":"2026-10-03T00:57:55.666Z","actor":"8724e666-3b9f-47cd-a9c8-c45af498d5d3","verb":"bp order progress","id":"WO-004","path":"orders/WO-004.progress.md"}
+{"at":"2026-10-03T01:09:18.842Z","actor":"8724e666-3b9f-47cd-a9c8-c45af498d5d3","verb":"bp order check","id":"WO-003","path":"orders/WO-003.acceptance.md"}
+{"at":"2026-10-03T01:09:18.978Z","actor":"8724e666-3b9f-47cd-a9c8-c45af498d5d3","verb":"bp order check","id":"WO-004","path":"orders/WO-004.acceptance.md"}
+{"at":"2026-10-03T01:09:19.299Z","actor":"8724e666-3b9f-47cd-a9c8-c45af498d5d3","verb":"bp order close","id":"WO-004","path":"orders/WO-004.close.md"}
+{"at":"2026-10-03T01:09:19.301Z","actor":"8724e666-3b9f-47cd-a9c8-c45af498d5d3","verb":"bp order close","id":"WO-004","path":"orders/WO-004.md","from":"review","to":"closed"}
+{"at":"2026-10-03T01:09:25.565Z","actor":"8724e666-3b9f-47cd-a9c8-c45af498d5d3","verb":"bp order close","id":"ISS-001","path":"issues/ISS-001.md","from":"open","to":"resolved"}
+{"at":"2026-10-03T01:09:25.566Z","actor":"8724e666-3b9f-47cd-a9c8-c45af498d5d3","verb":"bp order close","id":"WO-003","path":"orders/WO-003.close.md"}
+{"at":"2026-10-03T01:09:25.567Z","actor":"8724e666-3b9f-47cd-a9c8-c45af498d5d3","verb":"bp order close","id":"WO-003","path":"orders/WO-003.md","from":"review","to":"closed"}
