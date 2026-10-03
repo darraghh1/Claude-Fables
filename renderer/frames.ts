@@ -4,17 +4,29 @@
  *   bun renderer/frames.ts < job.json
  *
  * Reads one JSON job from stdin, `{ scene, columns, rows, look, fps, seconds }`,
- * and writes NDJSON to stdout: first `{"ready":true,"columns","rows","speaksAfter"}`,
- * then one `{"i","t","cells"}` line per frame, `cells` in the Raster encoding
- * (cells.ts). On failure: one `{"error"}` line on stderr and exit 1.
+ * and writes NDJSON to stdout: first
+ * `{"ready":true,"columns","rows","speaksAfter","scale","cropTop"}`, then one
+ * `{"i","t","cells"}` line per frame, `cells` in the Raster encoding (cells.ts).
+ * On failure: one `{"error"}` line on stderr and exit 1.
  *
- * The scene is drawn as the band draws it (the 3D figure, the job's look) at
- * `columns*8 × rows*16` CSS px, without the speech bubble and the chapter tag,
- * which the mod draws as text. Each frame is the SVG with its clock moved to
- * `t` (svg.ts:resumeAt), decoded as an image in a page and drawn to a canvas at
- * half its CSS size, which keeps 4×4 samples for every terminal pixel; bun
- * averages and sharpens those down to `columns × rows*2` pixels. Several
- * pages, each its own renderer process, draw frames side by side.
+ * The scene is drawn as the band draws it (the 3D figure, the job's look)
+ * without the speech bubble and the chapter tag, which the mod draws as text,
+ * at one art pixel (hooks/svg.ts:U) per terminal pixel, so `scale` is always 1.
+ * The stage is `columns` art pixels wide and 32 tall; a band of fewer than 32
+ * pixel rows shows the window of it from art row `cropTop` that holds the
+ * ground and Claude (window.ts), so a short band crops the scene rather than
+ * shrinking it. Each frame is the SVG with its clock moved to `t`
+ * (svg.ts:resumeAt), decoded as an image in a page and drawn to a canvas at
+ * exactly the size the SVG declares, DEVICE pixels to a stage unit. Pixel art
+ * then takes one device pixel at the middle of every art pixel; the painterly
+ * looks average each art pixel's block (sample.ts). Several pages, each its
+ * own renderer process, draw frames side by side.
+ *
+ * Drawn smaller than it declares, Chromium rasterizes an SVG image at the
+ * smaller size, and below half a device pixel per stage unit the pixel look's
+ * pixelize filter (svg.ts:PIXELIZE, a 2-unit grid of 0.4-unit dots) loses its
+ * grid and draws a flat dark stage (ISS-001). Declared and drawn sizes are
+ * therefore always equal here, at a whole number of device pixels per unit.
  *
  * The browser is this process's alone: it ends, and its profile is deleted, on
  * normal exit, SIGTERM, SIGINT, or once stdout is closed.
@@ -23,25 +35,13 @@
 import type { FablesScene } from '../types'
 
 import { parseScene } from '../hooks/scene'
-import { resumeAt, sceneToSvg, speaksAfter } from '../hooks/svg'
+import { resumeAt } from '../hooks/svg'
 import { type Browser, launch } from './browser'
 import { packHalfBlocks } from './cells'
-import { downsample } from './sample'
+import { plan, terminalSvg, toPixels } from './plan'
 
-/** CSS pixels a terminal cell covers: 8 wide, 16 tall (two pixels of 8×8). */
-const CELL_W = 8
-const CELL_H = 16
-/**
- * The canvas is drawn at this fraction of the CSS size. Full size costs ~5×
- * the time and cannot keep up; a quarter loses the pixel-art Claude, whose
- * pixelize filter samples sparse dots that vanish at that scale.
- */
-const RASTER = 0.5
 /** Pages drawing at once. Measured on tulip (6 cores, 12 threads): 4 is past the knee. */
 const WORKERS = 4
-/** The figure the band draws (hooks/register.tsx). */
-const FIGURE = '3d'
-
 interface Job {
   scene: FablesScene
   columns: number
@@ -115,12 +115,6 @@ async function evaluate(browser: Browser, session: string, expression: string): 
   return isRecord(reply.result) ? reply.result.value : undefined
 }
 
-/** The scene's SVG as the terminal shows it: no bubble, no chapter tag. */
-export function terminalSvg(job: Job): { svg: string; speaks: number } {
-  const svg = sceneToSvg({ ...job.scene, title: undefined }, { width: job.columns * CELL_W, height: job.rows * CELL_H, look: job.look, figure: FIGURE })
-  const open = svg.indexOf('>') + 1
-  return { svg: `${svg.slice(0, open)}<style>[data-part="speech"]{display:none}</style>${svg.slice(open)}`, speaks: speaksAfter(svg) }
-}
 
 let browser: Browser | undefined
 let ending = false
@@ -163,17 +157,15 @@ async function main(): Promise<void> {
     throw new Error('stdin is not one JSON job')
   }
   const job = parseJob(input)
-  const { svg, speaks } = terminalSvg(job)
+  const at = plan(job)
+  const { svg, speaks } = terminalSvg(job, at)
   const count = Math.ceil(job.fps * job.seconds - 1e-9)
-  const w = job.columns * CELL_W * RASTER
-  const h = job.rows * CELL_H * RASTER
-  const factor = CELL_W * RASTER
 
   const started = await launch(process.env.CHROMIUM || 'chromium')
   browser = started
   if (ending) return
   const sessions = await Promise.all(Array.from({ length: Math.min(WORKERS, count) }, () => openPage(started)))
-  await emit({ ready: true, columns: job.columns, rows: job.rows, speaksAfter: speaks })
+  await emit({ ready: true, columns: job.columns, rows: job.rows, speaksAfter: speaks, scale: 1, cropTop: at.cropTop })
 
   // Workers take frames in order; finished frames are written in order as soon as each is next.
   const done = new Map<number, string>()
@@ -193,10 +185,10 @@ async function main(): Promise<void> {
   await Promise.all(
     sessions.map(async session => {
       for (let i = next++; i < count && !ending; i = next++) {
-        const value = await evaluate(started, session, `__grab(${JSON.stringify(resumeAt(svg, i / job.fps))}, ${w}, ${h})`)
+        const value = await evaluate(started, session, `__grab(${JSON.stringify(resumeAt(svg, i / job.fps))}, ${at.width}, ${at.height})`)
         if (typeof value !== 'string') throw new Error(`frame ${i}: page returned no pixels`)
         const rgba = new Uint8Array(Buffer.from(value, 'base64'))
-        done.set(i, packHalfBlocks(downsample(rgba, w, h, factor), job.columns, job.rows))
+        done.set(i, packHalfBlocks(toPixels(rgba, at, job.columns, job.rows), job.columns, job.rows))
         await flush()
       }
     }),
