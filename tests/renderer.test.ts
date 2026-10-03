@@ -3,9 +3,9 @@ import { describe, expect, test } from 'claude-code/testing'
 import type { FablesHeroAction, FablesScene } from '../types'
 
 import { parseScene } from '../hooks/scene'
-import { base64, packHalfBlocks } from '../renderer/cells'
-import { brightness, crispEdges, gradientEnergy, inBetween, rowsWithColour, unbase64, unpackHalfBlocks } from '../renderer/metrics'
-import { plan, type Shape, terminalSvg, toPixels } from '../renderer/plan'
+import { base64, packHalfBlocks, packQuadrants } from '../renderer/cells'
+import { brightness, crispEdges, expandCells, gradientEnergy, inBetween, meanAbsoluteError, rowsWithColour, unbase64, unpackHalfBlocks } from '../renderer/metrics'
+import { glyphsOf, type Plan, plan, type Shape, terminalSvg, toPixels } from '../renderer/plan'
 import { pointSample, rowsOf } from '../renderer/sample'
 import { ART_ROWS, cropTop, GROUND_ROW, heroRows } from '../renderer/window'
 
@@ -171,5 +171,34 @@ describe('metrics', () => {
   test('rowsWithColour finds a colour within the tolerance', () => {
     const rgb = new Uint8Array([0, 0, 0, 0, 0, 0, 0xd0, 0x70, 0x50, 0, 0, 0])
     expect(rowsWithColour(rgb, 2, 0xd97757, 24)).toEqual({ top: 1, bottom: 1, count: 1 })
+  })
+})
+
+describe('quadrant sampling and measuring', () => {
+  /** A 2-column, 1-row band of 4-px art pixels, each white on its left half and black on its right. */
+  const at: Plan = { width: 8, height: 8, factor: 4, x0: 0, y0: 0, cropTop: 0, pixel: false }
+  const striped = new Uint8Array(8 * 8 * 4)
+  for (let i = 0; i < 64; i++) striped.set(i % 4 < 2 ? [255, 255, 255, 255] : [0, 0, 0, 255], i * 4)
+
+  test('quadrants sample half an art pixel across and a whole one down, where half blocks average it', () => {
+    const half = toPixels(striped, at, 2, 1, 'half')
+    expect(half).toHaveLength(2 * 2 * 3)
+    expect(new Set(half).size).toBe(1)
+    const quadrant = toPixels(striped, at, 2, 1, 'quadrant')
+    expect(quadrant).toHaveLength(4 * 2 * 3)
+    expect([...quadrant].filter((_, i) => i % 3 === 0)).toEqual([255, 0, 255, 0, 255, 0, 255, 0])
+    expect(glyphsOf({ pixel: true }, 'quadrant')).toBe('half')
+    expect(glyphsOf({ pixel: false }, 'quadrant')).toBe('quadrant')
+  })
+
+  test('expandCells shows what the cells draw: a two-colour block exactly in quadrants, one colour a row in half blocks', () => {
+    // One cell's 2×2 subpixels: red, blue / red, red.
+    const block = new Uint8Array([200, 0, 0, 0, 0, 200, 200, 0, 0, 200, 0, 0])
+    expect(meanAbsoluteError(expandCells(packQuadrants(block, 1, 1), 1, 1)!, block)).toBe(0)
+    // The same picture in a half block: top pixel purple, bottom red, each spread over its subpixel row.
+    const halfShown = expandCells(packHalfBlocks(new Uint8Array([100, 0, 100, 200, 0, 0]), 1, 1), 1, 1)!
+    expect([...halfShown]).toEqual([100, 0, 100, 100, 0, 100, 200, 0, 0, 200, 0, 0])
+    expect(Math.abs(meanAbsoluteError(halfShown, block) - 400 / 12)).toBeLessThan(1e-9)
+    expect(expandCells(base64(new Uint8Array(12).fill(0x41)), 1, 1)).toBeUndefined()
   })
 })
