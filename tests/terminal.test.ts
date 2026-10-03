@@ -9,7 +9,7 @@ import { DEFAULT_LOOK } from '../hooks/looks'
 import { TYPE_SECONDS_PER_CHAR } from '../hooks/scene'
 import { H, MAX_SVG, resumeAt, sceneToSvg } from '../hooks/svg'
 import { compose, DARK, decode, rowText, wrap } from '../hooks/terminal/compose'
-import { loopStart, MIN_LOOP_SECONDS } from '../hooks/terminal/loop'
+import { loopStart, MIN_LOOP_SECONDS, played, WRAP_FADE_SECONDS, wrapBlend } from '../hooks/terminal/loop'
 import { FPS } from '../hooks/terminal/player'
 import { readMs } from '../hooks/narrator'
 import { ENTRANCE_SECONDS } from '../hooks/scene'
@@ -369,8 +369,9 @@ describe('the terminal band', () => {
     await w.clock.advance(3000)
     const idle = w.blits.slice(from)
     expect(idle.length).toBeGreaterThan(12)
-    // The synthetic frames ramp one way, so the least-different start allowed makes the shortest loop, 1 s.
-    expect(new Set(idle).size).toBeGreaterThanOrEqual(12)
+    // The synthetic frames ramp one way: the shortest loop, 1 s, whose last 0.5 s fades back toward its
+    // start (the wrap fade), so some pictures come round twice in a lap; it still moves throughout.
+    expect(new Set(idle).size).toBeGreaterThan(5)
     expect(w.events).toEqual(['start 1', 'end 1'])
     expect(w.jobs).toHaveLength(1)
     expect(engine.asked()).toBe(askedAtEnd)
@@ -535,7 +536,7 @@ describe('the terminal band', () => {
     await ui.unmount()
   })
 
-  test('loops from the frame after the one least different from the last, and never loops less than 1 s', async ($, on) => {
+  test('loops from the frame after the one least different from the last, fades toward the frames before it over the last 0.5 s, and never loops less than 1 s', async ($, on) => {
     const count = FPS * Math.max(1, Math.ceil(readMs(SCENE) / 1000))
     const k = count - 30
     const colour = (i: number) => (i === k ? 0x0f0000 + (count - 1) : 0x0f0000 + i) * 0x100
@@ -556,9 +557,17 @@ describe('the terminal band', () => {
       const props = (await ui.find({ type: 'Raster', key: 'fables' }))?.props
       return decode(typeof props?.cells === 'string' ? props.cells : '')![(8 * 200 - 1) * 3 + 1]!
     }
-    // The last frame, then the wrap: the frame after k, not the 2 s-back frame the old loop took.
-    expect(await art(count + 3 * (count - k - 1) - 1)).toBe(colour(count - 1) & 0xffffff)
-    expect(await art(count + 3 * (count - k - 1))).toBe(colour(k + 1) & 0xffffff)
+    const loop = count - k - 1
+    // Inside the wrap fade, the band plays the frame blended toward the one a loop before it (lead ruling, WO-004).
+    const span = Math.round(WRAP_FADE_SECONDS * FPS)
+    const j = count - 3
+    const weight = (j - (count - span) + 1) / span
+    const green = (await art(count + 3 * loop - 3)) >>> 8
+    expect(green).toBe(Math.round(j - loop * weight))
+    // The last frame, then the wrap: the frame after k, not the 2 s-back frame the old loop took. The final
+    // frame plays as frame k, the one before the loop start, which here equals the final frame drawn.
+    expect(await art(count + 3 * loop - 1)).toBe(colour(count - 1) & 0xffffff)
+    expect(await art(count + 3 * loop)).toBe(colour(k + 1) & 0xffffff)
     // Pure: the loop starts right after k; a match inside the last second is not taken.
     const frame = (c: number) => new Uint32Array([0x2580, c, c])
     const synthetic = Array.from({ length: 60 }, (_, i) => frame(i * 3))
@@ -568,6 +577,11 @@ describe('the terminal band', () => {
     expect(loopStart(synthetic, 12)).toBe(41)
     expect(60 - loopStart(synthetic, 12)).toBeGreaterThanOrEqual(MIN_LOOP_SECONDS * 12)
     expect(loopStart(synthetic.slice(0, 8), 12)).toBe(0)
+    // The wrap fade: none before the last 0.5 s, half-way through it a blend, and the final frame plays as the one before the start.
+    expect(wrapBlend(53, 60, 41, 12)).toBeUndefined()
+    expect(wrapBlend(56, 60, 41, 12)).toEqual({ other: 37, weight: 3 / 6 })
+    expect(played(synthetic, 59, 41, 12)).toEqual(synthetic[40])
+    expect(played(synthetic, 30, 41, 12)).toBe(synthetic[30])
     await $.command.run({ command: 'fables', args: 'off' })
     await ui.unmount()
   })

@@ -20,7 +20,7 @@ import type { FablesScene } from '../../types'
 import { readMs } from '../narrator'
 import { ENTRANCE_SECONDS } from '../scene'
 import { blend, compose, decode, fit } from './compose'
-import { loopStart } from './loop'
+import { loopStart, wrapBlend } from './loop'
 
 /** Frames a second the helper draws and the band plays. */
 export const FPS = 12
@@ -188,15 +188,20 @@ export class Player {
   private artAt(clip: Clip, now: number): Uint32Array | undefined {
     if (clip.frames.length === 0) return undefined
     const t = (now - (clip.shownAt ?? now)) / 1000
-    const art = decode(clip.frames[this.frameIndex(clip, t)]!)
+    const j = this.frameIndex(clip, t)
+    const drawn = decode(clip.frames[j]!)
+    const wrap = clip.loopFrom === undefined ? undefined : wrapBlend(j, clip.frames.length, clip.loopFrom, FPS)
+    const toward = wrap ? decode(clip.frames[wrap.other]!) : undefined
+    const art = drawn && wrap && toward ? blend(drawn, toward, wrap.weight) : drawn
     if (!art || !clip.fadeFrom || t >= ENTRANCE_SECONDS) return art
     return blend(clip.fadeFrom, art, Math.max(0, t) / ENTRANCE_SECONDS)
   }
 
   /**
    * The frame due `t` seconds in. Past the end, the frames from the clip's
-   * loop start play round again; while frames are still coming, the newest in
-   * stands in for one not yet drawn.
+   * loop start play round again (their last WRAP_FADE_SECONDS fading toward the
+   * frames before the start, in artAt); while frames are still coming, the newest
+   * in stands in for one not yet drawn.
    */
   private frameIndex(clip: Clip, t: number): number {
     const i = Math.max(0, Math.floor(t * FPS))

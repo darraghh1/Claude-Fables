@@ -18,9 +18,11 @@
  *    beside it. The baseline helper is extracted from git into a temp dir, once per machine.
  *
  * 9. Seamless loop: on SAMPLES[0], [3] and [5] at 220×8, rendered as the band asks (12 fps, its
- *    reading time, no entrance), the wrap from the final frame to the loop's start
- *    (hooks/terminal/loop.ts:loopStart) differs by at most 1.5× the median step between
- *    consecutive frames in the loop; both numbers are printed.
+ *    reading time, no entrance), and played as the band plays them across the wrap
+ *    (hooks/terminal/loop.ts:loopStart, played), the largest step between consecutive played
+ *    frames in the wrap window is at most max(2× the loop's median step, 1 per channel per
+ *    cell) (lead ruling, WO-004). Both are printed, with the raw seam (final frame vs the
+ *    loop's first) for the record.
  *
  * Exits 0 when all hold; otherwise prints every failure and exits 1.
  */
@@ -33,7 +35,7 @@ import { dirname, join } from 'node:path'
 import { LOOK_NAMES } from '../hooks/looks'
 import { readMs } from '../hooks/narrator'
 import { decode } from '../hooks/terminal/compose'
-import { distance, loopStart } from '../hooks/terminal/loop'
+import { distance, loopStart, played, WRAP_FADE_SECONDS } from '../hooks/terminal/loop'
 import { parseScene } from '../hooks/scene'
 import { SAMPLES } from '../scripts/samples'
 import { HALF_BLOCK } from './cells'
@@ -350,7 +352,7 @@ async function sharper() {
 
 // ---------------------------------------------------------------- 9. a seamless loop
 
-const MAX_SEAM = 1.5
+const MAX_STEP = 2
 
 async function seamlessLoop() {
   const columns = 220
@@ -378,8 +380,17 @@ async function seamlessLoop() {
     const seam = distance(frames[count - 1]!, frames[from]!)
     const steps = frames.slice(from + 1).map((f, i) => distance(frames[from + i]!, f)).sort((a, b) => a - b)
     const median = steps.length ? steps[Math.floor(steps.length / 2)]! : 0
-    console.log(`seam SAMPLES[${sample}] at 220×8: loop frames ${from}–${count - 1} of ${count}; seam ${seam} vs median step ${median} (${median ? fixed(seam / median, 2) : '—'}×)`)
-    check(seam <= MAX_SEAM * median, `seam: SAMPLES[${sample}] wraps within ${MAX_SEAM}× its median frame step (seam ${seam}, median ${median})`)
+    // The wrap window as the band plays it: into the fade, through the final frame, and on past the loop's first.
+    const window = [...Array.from({ length: Math.round(WRAP_FADE_SECONDS * FPS) + 2 }, (_, i) => count - Math.round(WRAP_FADE_SECONDS * FPS) - 2 + i), from, from + 1]
+    const shown = window.map(j => played(frames, j, from, FPS))
+    const worst = Math.max(...shown.slice(1).map((f, i) => distance(shown[i]!, f)))
+    const floor = columns * rows * 2 * 3
+    const limit = Math.max(MAX_STEP * median, floor)
+    console.log(
+      `seam SAMPLES[${sample}] at 220×8: loop frames ${from}–${count - 1} of ${count}; largest played step across the wrap ${worst} vs limit ${limit} ` +
+        `(max of ${MAX_STEP}× median step ${median}, floor ${floor}); raw seam ${seam} (${median ? fixed(seam / median, 2) : '—'}× median), for the record`,
+    )
+    check(worst <= limit, `seam: SAMPLES[${sample}] plays across its wrap in steps ≤ max(${MAX_STEP}× its median step, 1 per channel per cell) (largest ${worst}, limit ${limit})`)
   })
 }
 

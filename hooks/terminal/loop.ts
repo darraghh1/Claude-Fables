@@ -5,14 +5,24 @@
  * after it. The wrap from the final frame to the loop's first is then about one
  * ordinary frame step.
  *
+ * Starting there is not always enough: a scene whose last seconds drift one
+ * way has no frame that matches its end. So over its last WRAP_FADE_SECONDS the
+ * loop also cross-fades toward the frames just before its start (wrapBlend),
+ * and its final frame as played is the one before the start: the wrap is then
+ * one ordinary step, whatever the scene does (lead ruling, WO-004).
+ *
  * Pure, with no I/O: the Player (player.ts) and the smoke (renderer/smoke.ts)
  * both measure with it, so the seam the smoke reports is the one the band plays.
  */
+
+import { blend } from './compose'
 
 /** How far back from the end the loop may start. */
 export const LOOP_WINDOW_SECONDS = 4
 /** The shortest loop the band plays. */
 export const MIN_LOOP_SECONDS = 1
+/** How long before the wrap the loop fades toward the frames before its start. */
+export const WRAP_FADE_SECONDS = 0.5
 
 /** How different two frames' cells look: the sum of absolute channel differences of every fg and bg colour. */
 export function distance(a: Uint32Array, b: Uint32Array): number {
@@ -50,4 +60,23 @@ export function loopStart(frames: readonly Uint32Array[], fps: number): number {
     }
   }
   return best + 1
+}
+
+/**
+ * How frame `j` of a clip of `n` frames looping from `from` is played: blended
+ * `weight` of the way toward frame `other`, the one a loop's length before it,
+ * when it is among the last WRAP_FADE_SECONDS; undefined when it plays as drawn.
+ * The weight reaches 1 on the final frame, which then plays as frame `from - 1`.
+ */
+export function wrapBlend(j: number, n: number, from: number, fps: number): { other: number; weight: number } | undefined {
+  const span = Math.min(Math.round(WRAP_FADE_SECONDS * fps), from, n - from - 1)
+  if (span <= 0 || j < n - span || j >= n) return undefined
+  return { other: j - (n - from), weight: (j - (n - span) + 1) / span }
+}
+
+/** Frame `j` as the band plays it, across the wrap fade (wrapBlend). */
+export function played(frames: readonly Uint32Array[], j: number, from: number, fps: number): Uint32Array {
+  const art = frames[j]!
+  const wrap = wrapBlend(j, frames.length, from, fps)
+  return wrap ? blend(art, frames[wrap.other]!, wrap.weight) : art
 }
