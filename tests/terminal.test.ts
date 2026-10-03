@@ -5,15 +5,15 @@ import type { ModelCompleteResult, On, RenderPropsOf } from 'claude-code'
 import type { FablesScene } from '../types'
 
 import { LINGER_MS } from '../hooks/director'
-import { DEFAULT_LOOK } from '../hooks/looks'
+import { DEFAULT_LOOK, LOOK_NAMES } from '../hooks/looks'
 import { TYPE_SECONDS_PER_CHAR } from '../hooks/scene'
 import { H, MAX_SVG, resumeAt, sceneToSvg } from '../hooks/svg'
-import { compose, DARK, decode, rowText, wrap } from '../hooks/terminal/compose'
+import { blend, compose, DARK, decode, rowText, wrap } from '../hooks/terminal/compose'
 import { loopStart, MIN_LOOP_SECONDS, played, WRAP_FADE_SECONDS, wrapBlend } from '../hooks/terminal/loop'
-import { FPS } from '../hooks/terminal/player'
+import { FPS, glyphsFor, parseGlyphs } from '../hooks/terminal/player'
 import { readMs } from '../hooks/narrator'
 import { ENTRANCE_SECONDS } from '../hooks/scene'
-import { base64 } from '../renderer/cells'
+import { base64, HALF_BLOCK, QUADRANT_GLYPHS } from '../renderer/cells'
 
 const SCENE: FablesScene = {
   backdrop: 'forest',
@@ -224,6 +224,71 @@ describe('the terminal band', () => {
     expect(w.jobs[0]?.env).toEqual({ CHROMIUM: '/opt/chrome' })
     await $.command.run({ command: 'fables', args: 'off' })
     await ui.unmount()
+  })
+
+  test('with terminalGlyphs auto, asks the helper for quadrants for ukiyoe and half blocks for pixel art', async ($, on) => {
+    const w = world(on, live())
+    const ui = await $.ui.mount({ plugin: 'fables', surface: 'terminal', component: 'AbovePrompt', props: band(200, 30) })
+    await w.clock.settle()
+    expect(w.jobs[0]).toMatchObject({ look: 'pixel', glyphs: 'half' })
+    w.state.style = 'ukiyoe'
+    await ui.redraw()
+    await w.clock.advance(500)
+    expect(w.jobs[1]).toMatchObject({ look: 'ukiyoe', glyphs: 'quadrant' })
+    expect(parseGlyphs(undefined)).toBe('auto')
+    expect(parseGlyphs('sextant')).toBe('auto')
+    for (const look of LOOK_NAMES) expect(glyphsFor(look, 'auto')).toBe(look === 'pixel' ? 'half' : 'quadrant')
+    expect(glyphsFor('pixel', 'quadrant')).toBe('half')
+    await $.command.run({ command: 'fables', args: 'off' })
+    await ui.unmount()
+  })
+
+  test('with terminalGlyphs half, asks the helper for half blocks for every look', { options: { terminalGlyphs: 'half' } }, async ($, on) => {
+    const w = world(on, live(), undefined, { state: { style: 'ukiyoe' } })
+    const ui = await $.ui.mount({ plugin: 'fables', surface: 'terminal', component: 'AbovePrompt', props: band(200, 30) })
+    await w.clock.settle()
+    expect(w.jobs[0]).toMatchObject({ look: 'ukiyoe', glyphs: 'half' })
+    expect(parseGlyphs('half')).toBe('half')
+    for (const look of LOOK_NAMES) expect(glyphsFor(look, 'half')).toBe('half')
+    await $.command.run({ command: 'fables', args: 'off' })
+    await ui.unmount()
+  })
+
+  test('a blend across a change of glyph takes the from-cell whole below 0.5 and the to-cell from 0.5; matching glyphs mix', () => {
+    const LL = 0x2596
+    const UPPER = 0x2598
+    // Cell 0: half block to quadrant. Cell 1: two quadrants inking different corners. Cell 2: space to half block.
+    // Cell 3: the same quadrant at both ends. Cell 4: the same half block.
+    const from = new Uint32Array([HALF_BLOCK, 0x102030, 0x405060, UPPER, 0xffffff, 0, 0x20, 0x808080, 0x808080, LL, 0x000000, 0xff0000, HALF_BLOCK, 0x204060, 0x000000])
+    const to = new Uint32Array([LL, 0xa0b0c0, 0x010203, 0x259a, 0x00ff00, 0x0000ff, HALF_BLOCK, 0x111111, 0xeeeeee, LL, 0xffffff, 0x00ff00, HALF_BLOCK, 0x6080a0, 0x101010])
+    const valid = new Set(QUADRANT_GLYPHS)
+    const between = (c: number, a: number, b: number) =>
+      [16, 8, 0].every(shift => {
+        const v = (c >>> shift) & 255
+        const lo = Math.min((a >>> shift) & 255, (b >>> shift) & 255)
+        const hi = Math.max((a >>> shift) & 255, (b >>> shift) & 255)
+        return v >= lo && v <= hi
+      })
+    for (const a of [0, 0.1, 0.25, 0.49, 0.4999, 0.5, 0.51, 0.75, 0.99, 1]) {
+      const out = blend(from, to, a)
+      for (let i = 0; i < out.length; i += 3) {
+        expect(valid.has(out[i]!)).toBe(true)
+        const cell = [...out.subarray(i, i + 3)]
+        if (from[i] !== to[i]) {
+          expect(cell).toEqual([...(a < 0.5 ? from : to).subarray(i, i + 3)])
+        } else {
+          expect(cell[0]).toBe(to[i])
+          expect(between(cell[1]!, from[i + 1]!, to[i + 1]!)).toBe(true)
+          expect(between(cell[2]!, from[i + 2]!, to[i + 2]!)).toBe(true)
+        }
+      }
+    }
+    // Matching glyphs really mix: half-way between black and white is mid grey.
+    expect(blend(from, to, 0.5)[9 + 1]).toBe(0x808080)
+    // The loop's wrap fade blends the same way (loop.ts:played).
+    const frames = Array.from({ length: 24 }, (_, i) => (i % 2 ? from : to))
+    const wrap = wrapBlend(22, 24, 12, 12)!
+    expect(played(frames, 22, 12, 12)).toEqual(blend(frames[22]!, frames[wrap.other]!, wrap.weight))
   })
 
   test('leaves the desktop band as it was: the Svg the scene draws, and no helper', async ($, on) => {

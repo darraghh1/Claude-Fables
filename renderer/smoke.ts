@@ -2,7 +2,8 @@
  * The frame helper's verify script, run from the repo root as `bun renderer/smoke.ts`.
  *
  * 1. Renders SAMPLES[0] at 200×20 cells, 12 fps, 7 s: one ready line and 84 frames,
- *    every frame valid Raster cells, at least 10 distinct, all within 8 s of spawn.
+ *    every frame valid Raster cells, at least 10 distinct, all within 8 s of spawn. Twice:
+ *    the default look in half blocks, and ukiyoe in quadrant glyphs.
  * 2. SIGTERMs a second helper 1 s into its render: within 2 s no process carrying its
  *    profile dir remains, and the dir is gone.
  * 3. With CHROMIUM=/nonexistent the helper exits 1 within 2 s with one JSON error line on stderr.
@@ -24,6 +25,12 @@
  *    cell) (lead ruling, WO-004). Both are printed, with the raw seam (final frame vs the
  *    loop's first) for the record.
  *
+ * 10. Quadrants: on SAMPLES[0], [3] and [5] at 220×8, for looks ukiyoe, engraving and
+ *    original, the cells' reconstruction MAE (metrics.ts:expandCells against the helper's
+ *    `reference` subpixels, mean absolute channel error) in quadrants is ≤ 0.85× that in half
+ *    blocks. All 9 pairs are printed.
+ * 11. The pixel look's frames are byte-identical whether the job asks for 'half' or 'quadrant'.
+ *
  * Exits 0 when all hold; otherwise prints every failure and exits 1.
  */
 
@@ -38,9 +45,9 @@ import { decode } from '../hooks/terminal/compose'
 import { distance, loopStart, played, WRAP_FADE_SECONDS } from '../hooks/terminal/loop'
 import { parseScene } from '../hooks/scene'
 import { SAMPLES } from '../scripts/samples'
-import { HALF_BLOCK } from './cells'
+import { HALF_BLOCK, quadrantMask } from './cells'
 import { profilePrefix } from './browser'
-import { brightness, crispEdges, gradientEnergy, inBetween, rowsWithColour, unpackHalfBlocks } from './metrics'
+import { brightness, crispEdges, expandCells, gradientEnergy, inBetween, meanAbsoluteError, rowsWithColour, unbase64, unpackHalfBlocks } from './metrics'
 import { ART_ROWS, GROUND_ROW, heroRows } from './window'
 
 const HELPER = join(import.meta.dir, 'frames.ts')
@@ -86,16 +93,20 @@ function run(child: ReturnType<typeof start>, onLine: (line: string) => void = (
 
 // ---------------------------------------------------------------- 1. a full render
 
-async function fullRender() {
+/** Renders SAMPLES[0] at 200×20, 12 fps, 7 s in `look` and `glyphs`, and checks its frames and its time. */
+async function fullRender(look?: string, glyphs: 'half' | 'quadrant' = 'half') {
+  const what = `${look ?? 'the default look'} in ${glyphs === 'half' ? 'half blocks' : 'quadrants'}`
+  const input = JSON.stringify({ scene: SAMPLES[0], columns: COLUMNS, rows: ROWS, fps: FPS, seconds: SECONDS, ...(look ? { look } : {}), ...(glyphs === 'half' ? {} : { glyphs }) })
+  const isGlyph = glyphs === 'half' ? (cp: number) => cp === HALF_BLOCK : (cp: number) => quadrantMask(cp) !== undefined
   const begun = performance.now()
   const lines: string[] = []
   let lastFrameAt = 0
-  const { code, stderr } = await run(start(), line => {
+  const { code, stderr } = await run(start(process.env, input), line => {
     lines.push(line)
     lastFrameAt = performance.now()
   })
   const elapsed = lastFrameAt - begun
-  console.log(`timing: spawn to last frame ${(elapsed / 1000).toFixed(2)} s for ${FRAMES} frames (${(elapsed / FRAMES).toFixed(1)} ms/frame), Chromium launch included`)
+  console.log(`timing (${what}): spawn to last frame ${(elapsed / 1000).toFixed(2)} s for ${FRAMES} frames (${(elapsed / FRAMES).toFixed(1)} ms/frame), Chromium launch included`)
 
   check(code === 0, `helper exits 0 (got ${code}${stderr ? `, stderr ${stderr.trim()}` : ''})`)
   const parsed: unknown[] = lines.map(l => JSON.parse(l))
@@ -118,16 +129,16 @@ async function fullRender() {
     if (raw.length !== bytes) return
     sized++
     for (let o = 0; o < raw.length; o += 12) {
-      if (raw.readUInt32LE(o) !== HALF_BLOCK) badGlyph++
+      if (!isGlyph(raw.readUInt32LE(o))) badGlyph++
       if (raw.readUInt32LE(o + 4) >>> 24 !== 0 || raw.readUInt32LE(o + 8) >>> 24 !== 0) badColour++
     }
   })
   check(sized === FRAMES, `every frame's cells decode to ${bytes} bytes (${sized}/${FRAMES})`)
   check(inOrder === FRAMES, `frames carry i and t = i/fps in order (${inOrder}/${FRAMES})`)
   check(distinct.size >= 10, `at least 10 distinct frames (${distinct.size})`)
-  check(badGlyph === 0, `every cell's code point is 0x2580 (${badGlyph} not)`)
+  check(badGlyph === 0, `${what}: every cell's code point is ${glyphs === 'half' ? '0x2580' : 'a quadrant glyph or a space'} (${badGlyph} not)`)
   check(badColour === 0, `every colour has bits 24-31 clear (${badColour} cells not)`)
-  check(elapsed <= BUDGET_MS, `spawn to last frame within ${BUDGET_MS / 1000} s (${(elapsed / 1000).toFixed(2)} s)`)
+  check(elapsed <= BUDGET_MS, `${what}: spawn to last frame within ${BUDGET_MS / 1000} s (${(elapsed / 1000).toFixed(2)} s)`)
 }
 
 // ---------------------------------------------------------------- 2. SIGTERM mid-render
@@ -394,7 +405,62 @@ async function seamlessLoop() {
   })
 }
 
+// ---------------------------------------------------------------- 10. quadrants reconstruct the painted looks better
+
+const MAX_MAE_RATIO = 0.85
+
+/** A job's frames as their cells, and as the `reference` subpixels the helper sampled for each. */
+async function cellsAndReference(input: Record<string, unknown>) {
+  const lines: string[] = []
+  const { code, stderr } = await run(start(process.env, JSON.stringify(input)), line => lines.push(line))
+  const frames = lines
+    .map(l => JSON.parse(l) as unknown)
+    .filter(isRecord)
+    .flatMap(f => (typeof f.cells === 'string' ? [{ cells: f.cells, reference: typeof f.reference === 'string' ? f.reference : undefined }] : []))
+  return { code, stderr, frames }
+}
+
+async function quadrantsReconstruct() {
+  const columns = 220
+  const rows = 8
+  const jobs = [0, 3, 5].flatMap(sample => ['ukiyoe', 'engraving', 'original'].map(look => ({ sample, look })))
+  const results = await pool(jobs, 3, j =>
+    Promise.all(
+      (['half', 'quadrant'] as const).map(glyphs =>
+        cellsAndReference({ scene: SAMPLES[j.sample], columns, rows, look: j.look, fps: 2, seconds: 2, glyphs, reference: true }),
+      ),
+    ),
+  )
+  jobs.forEach((j, k) => {
+    const [half, quadrant] = results[k]!
+    const mae = (r: typeof half) => {
+      const each = r.frames.map(f => {
+        const shown = expandCells(f.cells, columns, rows)
+        const reference = f.reference === undefined ? undefined : unbase64(f.reference)
+        return shown && reference ? meanAbsoluteError(shown, reference) : Infinity
+      })
+      return r.code === 0 && each.length === 4 ? each.reduce((a, b) => a + b, 0) / each.length : Infinity
+    }
+    const h = mae(half)
+    const q = mae(quadrant)
+    console.log(`quadrants ${j.look} SAMPLES[${j.sample}] at 220×8: reconstruction MAE ${fixed(q, 2)} (quadrant) vs ${fixed(h, 2)} (half) = ${fixed(q / h, 3)}×`)
+    const failed = [half, quadrant].find(r => r.code !== 0)
+    check(q <= MAX_MAE_RATIO * h, `quadrants: ${j.look} SAMPLES[${j.sample}] reconstructs with MAE ≤ ${MAX_MAE_RATIO}× half blocks' (${fixed(q / h, 3)}×${failed ? `; exit ${failed.code}: ${failed.stderr.trim()}` : ''})`)
+  })
+}
+
+// ---------------------------------------------------------------- 11. the pixel look is always half blocks
+
+async function pixelIgnoresGlyphs() {
+  const [half, quadrant] = await Promise.all(
+    (['half', 'quadrant'] as const).map(glyphs => cellsAndReference({ scene: SAMPLES[0], columns: 220, rows: 8, look: 'pixel', fps: 2, seconds: 2, glyphs })),
+  )
+  const same = half!.code === 0 && half!.frames.length === 4 && half!.frames.every((f, i) => f.cells === quadrant!.frames[i]?.cells && quadrant!.frames.length === 4)
+  check(same, `pixel: frames are byte-identical whether the job asks for half blocks or quadrants (${half!.frames.length} and ${quadrant!.frames.length} frames)`)
+}
+
 await fullRender()
+await fullRender('ukiyoe', 'quadrant')
 await terminated()
 await missingBrowser()
 await looksLit()
@@ -403,6 +469,8 @@ await pixelExact()
 await croppedNotZoomed()
 await sharper()
 await seamlessLoop()
+await quadrantsReconstruct()
+await pixelIgnoresGlyphs()
 if (failures.length) {
   console.log(`\n${failures.length} failed`)
   process.exit(1)

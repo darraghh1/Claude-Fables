@@ -17,6 +17,7 @@
 import type { HookStream, ProcessSpawnChunk, ProcessSpawnRequest, ProcessSpawnResult, RasterBlitArgs, Timer, UiBlitResult } from 'claude-code'
 import type { FablesScene } from '../../types'
 
+import { lookFor } from '../looks'
 import { readMs } from '../narrator'
 import { ENTRANCE_SECONDS } from '../scene'
 import { blend, compose, decode, fit } from './compose'
@@ -33,7 +34,25 @@ const END_WAIT_MS = 2000
 /** The Raster's key in the band's tree. */
 export const RASTER_KEY = 'fables'
 
-export type PlayerConfig = { chromiumPath: string }
+/**
+ * The config menu's terminalGlyphs: 'auto' draws pixel art in half blocks and
+ * every painted look in quadrants; 'half' and 'quadrant' ask for one for every
+ * look (pixel art is half blocks whatever is asked: renderer/plan.ts:glyphsOf).
+ */
+export type GlyphSetting = 'auto' | 'half' | 'quadrant'
+
+/** The config menu's terminalGlyphs as a setting; anything else is 'auto'. */
+export function parseGlyphs(value: unknown): GlyphSetting {
+  return value === 'half' || value === 'quadrant' ? value : 'auto'
+}
+
+/** The glyphs the helper is asked to draw `look` in under `setting`. */
+export function glyphsFor(look: string, setting: GlyphSetting): 'half' | 'quadrant' {
+  if (setting === 'half' || lookFor(look).pixel === true) return 'half'
+  return 'quadrant'
+}
+
+export type PlayerConfig = { chromiumPath: string; terminalGlyphs?: GlyphSetting }
 
 /**
  * What the player reaches the host through, built in register.tsx from the
@@ -284,7 +303,8 @@ export class Player {
     // The helper draws the scene without its entrance: the band cross-fades it in from the last picture itself.
     const scene: FablesScene = { ...want.scene }
     delete scene.enter
-    const job = { scene, columns: want.columns, rows: want.rows, look: want.look, fps: FPS, seconds: clip.count / FPS }
+    const glyphs = glyphsFor(want.look, this.config.terminalGlyphs ?? 'auto')
+    const job = { scene, columns: want.columns, rows: want.rows, look: want.look, fps: FPS, seconds: clip.count / FPS, glyphs }
     const stream = host.spawn({
       argv: ['bun', `${host.root}/renderer/frames.ts`],
       input: JSON.stringify(job),

@@ -127,13 +127,13 @@ Every scene is one small model request, so this costs a few requests per minute 
 
 ## Terminal
 
-In a terminal, the same scenes play above the prompt as coloured half-block cells, with the caption typed out in a bubble beside Claude and the chapter tag as text. Each scene is drawn by `renderer/frames.ts`, which needs three things on the machine:
+In a terminal, the same scenes play above the prompt as coloured block cells, with the caption typed out in a bubble beside Claude and the chapter tag as text. Each scene is drawn by `renderer/frames.ts`, which needs three things on the machine:
 
 - **bun** on `PATH`.
 - **Chromium** (or Chrome). The config menu's **Chromium** (`pluginConfigs.fables.chromiumPath`) names it when it is not `chromium` on `PATH`.
 - **A 24-bit-colour terminal.** Inside tmux, Claude Code falls back to 256 colours and the art turns to grey smudges; start it with `CLAUDE_CODE_TMUX_TRUECOLOR=1` (and let tmux pass true colour through to your terminal, `set -as terminal-features ',*:RGB'`).
 
-Every style draws as itself, the default Pixel Art included. The band takes 8 rows, or one less than it has room for; **Terminal band rows** (`pluginConfigs.fables.terminalRows`) changes that. Without bun or Chromium, or when no frame arrives within 5 seconds, the band shows the caption as text in a box and writes the reason once to the debug log.
+Every style draws as itself, the default Pixel Art included. The band takes 8 rows, or one less than it has room for; **Terminal band rows** (`pluginConfigs.fables.terminalRows`) changes that. Pixel Art draws in half blocks (`▀`), one cell per art pixel, which is its native resolution; the painted looks draw in 2×2 quadrant glyphs (`▘ ▚ ▙ …`), two colours a cell at twice the detail across, which can fringe on busy edges. **Terminal band glyphs** (`pluginConfigs.fables.terminalGlyphs`) is `auto` (that split), `half` (half blocks for every look) or `quadrant`. Without bun or Chromium, or when no frame arrives within 5 seconds, the band shows the caption as text in a box and writes the reason once to the debug log.
 
 The terminal band is always on. Once a scene's frames are drawn the helper ends, and the band loops the scene's last 2 seconds from the frames it kept, with no helper and no model call, until the next scene comes. The last scene is remembered, so a new session opens with it on the band before the first prompt. `/fables off` clears the band and forgets the scene.
 

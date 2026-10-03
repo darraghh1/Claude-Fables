@@ -3,10 +3,15 @@
  *
  *   bun renderer/frames.ts < job.json
  *
- * Reads one JSON job from stdin, `{ scene, columns, rows, look, fps, seconds }`,
+ * Reads one JSON job from stdin, `{ scene, columns, rows, look, fps, seconds, glyphs? }`,
  * and writes NDJSON to stdout: first
- * `{"ready":true,"columns","rows","speaksAfter","scale","cropTop"}`, then one
+ * `{"ready":true,"columns","rows","speaksAfter","scale","cropTop","glyphs"}`, then one
  * `{"i","t","cells"}` line per frame, `cells` in the Raster encoding (cells.ts).
+ * `glyphs` is 'half' (the default: half blocks) or 'quadrant' (2×2 quadrant
+ * glyphs, twice the detail across); the pixel look is always 'half', and the
+ * ready line says which the frames are. A job with `reference: true` (the
+ * smoke's, never the band's) also gets each frame's `columns*2 × rows*2`
+ * subpixel sample as base64 RGB in `reference`, which the cells are measured against.
  * On failure: one `{"error"}` line on stderr and exit 1.
  *
  * The scene is drawn as the band draws it (the 3D figure, the job's look)
@@ -37,8 +42,8 @@ import type { FablesScene } from '../types'
 import { parseScene } from '../hooks/scene'
 import { resumeAt } from '../hooks/svg'
 import { type Browser, launch } from './browser'
-import { packHalfBlocks } from './cells'
-import { plan, terminalSvg, toPixels } from './plan'
+import { base64, packHalfBlocks, packQuadrants } from './cells'
+import { type Glyphs, glyphsOf, plan, terminalSvg, toPixels } from './plan'
 
 /** Pages drawing at once. Measured on tulip (6 cores, 12 threads): 4 is past the knee. */
 const WORKERS = 4
@@ -49,6 +54,8 @@ interface Job {
   look: string | undefined
   fps: number
   seconds: number
+  glyphs: Glyphs
+  reference: boolean
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null
@@ -69,7 +76,18 @@ export function parseJob(input: unknown): Job {
   if (!isPositive(input.fps, 60)) throw new Error('job.fps must be a number above 0, at most 60')
   if (!isPositive(input.seconds, 600)) throw new Error('job.seconds must be a number above 0, at most 600')
   if (input.look !== undefined && typeof input.look !== 'string') throw new Error('job.look must be a string')
-  return { scene, columns: input.columns, rows: input.rows, look: input.look, fps: input.fps, seconds: input.seconds }
+  if (input.glyphs !== undefined && input.glyphs !== 'half' && input.glyphs !== 'quadrant') throw new Error("job.glyphs must be 'half' or 'quadrant'")
+  if (input.reference !== undefined && typeof input.reference !== 'boolean') throw new Error('job.reference must be true or false')
+  return {
+    scene,
+    columns: input.columns,
+    rows: input.rows,
+    look: input.look,
+    fps: input.fps,
+    seconds: input.seconds,
+    glyphs: input.glyphs ?? 'half',
+    reference: input.reference === true,
+  }
 }
 
 /**
@@ -165,19 +183,20 @@ async function main(): Promise<void> {
   browser = started
   if (ending) return
   const sessions = await Promise.all(Array.from({ length: Math.min(WORKERS, count) }, () => openPage(started)))
-  await emit({ ready: true, columns: job.columns, rows: job.rows, speaksAfter: speaks, scale: 1, cropTop: at.cropTop })
+  const glyphs = glyphsOf(at, job.glyphs)
+  await emit({ ready: true, columns: job.columns, rows: job.rows, speaksAfter: speaks, scale: 1, cropTop: at.cropTop, glyphs })
 
   // Workers take frames in order; finished frames are written in order as soon as each is next.
-  const done = new Map<number, string>()
+  const done = new Map<number, { cells: string; reference?: string }>()
   let next = 0
   let written = 0
   let flushing = Promise.resolve()
   const flush = () =>
     (flushing = flushing.then(async () => {
       while (done.has(written)) {
-        const cells = done.get(written)
+        const frame = done.get(written)
         done.delete(written)
-        await emit({ i: written, t: Number((written / job.fps).toFixed(4)), cells })
+        await emit({ i: written, t: Number((written / job.fps).toFixed(4)), ...frame })
         written++
       }
     }))
@@ -188,7 +207,10 @@ async function main(): Promise<void> {
         const value = await evaluate(started, session, `__grab(${JSON.stringify(resumeAt(svg, i / job.fps))}, ${at.width}, ${at.height})`)
         if (typeof value !== 'string') throw new Error(`frame ${i}: page returned no pixels`)
         const rgba = new Uint8Array(Buffer.from(value, 'base64'))
-        done.set(i, packHalfBlocks(toPixels(rgba, at, job.columns, job.rows), job.columns, job.rows))
+        const pixels = toPixels(rgba, at, job.columns, job.rows, glyphs)
+        const cells = glyphs === 'quadrant' ? packQuadrants(pixels, job.columns, job.rows) : packHalfBlocks(pixels, job.columns, job.rows)
+        const subpixels = !job.reference || at.pixel ? undefined : glyphs === 'quadrant' ? pixels : toPixels(rgba, at, job.columns, job.rows, 'quadrant')
+        done.set(i, subpixels ? { cells, reference: base64(subpixels) } : { cells })
         await flush()
       }
     }),

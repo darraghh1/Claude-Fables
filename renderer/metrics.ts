@@ -3,7 +3,7 @@
  * Pure: no I/O. Every image here is RGB, row-major, 3 bytes a pixel.
  */
 
-import { HALF_BLOCK } from './cells'
+import { HALF_BLOCK, quadrantMask } from './cells'
 
 const B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
 
@@ -45,6 +45,43 @@ export function unpackHalfBlocks(cells: string, columns: number, rows: number): 
     }
   }
   return rgb
+}
+
+/**
+ * What a frame's cells show, as `columns*2 × rows*2` RGB subpixels: each cell's
+ * 2×2 block, every subpixel its glyph inks in fg and the rest in bg. A half
+ * block inks its top two, so it shows one colour per subpixel row. Undefined if
+ * the cells are not that many, or a glyph is neither a half block nor a quadrant.
+ */
+export function expandCells(cells: string, columns: number, rows: number): Uint8Array | undefined {
+  const bin = unbase64(cells)
+  if (!bin || bin.length !== columns * rows * 12) return undefined
+  const word = (o: number) => (bin[o]! | (bin[o + 1]! << 8) | (bin[o + 2]! << 16) | (bin[o + 3]! << 24)) >>> 0
+  const width = columns * 2
+  const rgb = new Uint8Array(width * rows * 2 * 3)
+  for (let r = 0; r < rows; r++) {
+    for (let x = 0; x < columns; x++) {
+      const o = (r * columns + x) * 12
+      const mask = quadrantMask(word(o))
+      if (mask === undefined) return undefined
+      ;[8, 4, 2, 1].forEach((bit, q) => {
+        const colour = mask & bit ? word(o + 4) : word(o + 8)
+        const k = ((r * 2 + (q >> 1)) * width + x * 2 + (q & 1)) * 3
+        rgb[k] = (colour >>> 16) & 255
+        rgb[k + 1] = (colour >>> 8) & 255
+        rgb[k + 2] = colour & 255
+      })
+    }
+  }
+  return rgb
+}
+
+/** The mean absolute difference between two images' channel values; Infinity when their sizes differ. */
+export function meanAbsoluteError(a: Uint8Array, b: Uint8Array): number {
+  if (a.length !== b.length || a.length === 0) return Infinity
+  let sum = 0
+  for (let i = 0; i < a.length; i++) sum += Math.abs(a[i]! - b[i]!)
+  return sum / a.length
 }
 
 /** The mean and the largest channel value over the whole image. */

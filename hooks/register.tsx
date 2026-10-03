@@ -8,7 +8,7 @@ import type { FablesScene } from '../types'
 import { parseScene } from './scene'
 import { H, MAX_SVG, resumeAt, sceneToSvg, speaksAfter, W } from './svg'
 import { bandBox as terminalBox } from './terminal/compose'
-import { Player, type PlayerHost, RASTER_KEY } from './terminal/player'
+import { parseGlyphs, Player, type PlayerHost, RASTER_KEY } from './terminal/player'
 
 const scene = atom({ plugin: 'fables', key: 'scene' } as const, null)
 const enabled = atom({ plugin: 'fables', key: 'enabled' } as const, true)
@@ -138,7 +138,7 @@ export const register: Register = (on, options) => {
   n.look = DEFAULT_LOOK
   const terminalRows = typeof options.terminalRows === 'number' && options.terminalRows > 0 ? options.terminalRows : TERMINAL_ROWS
   const chromiumPath = typeof options.chromiumPath === 'string' && options.chromiumPath ? options.chromiumPath : 'chromium'
-  const player = new Player({ chromiumPath })
+  const player = new Player({ chromiumPath, terminalGlyphs: parseGlyphs(options.terminalGlyphs) })
   const kept: Kept = {}
 
   on('session.start', async ($, e, next) => {

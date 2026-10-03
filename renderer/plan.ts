@@ -8,7 +8,7 @@ import type { FablesScene } from '../types'
 
 import { lookFor } from '../hooks/looks'
 import { H, sceneToSvg, speaksAfter, stageWidth, U } from '../hooks/svg'
-import { downsample, pointSample, rowsOf } from './sample'
+import { downsampleBlocks, pointSample, rowsOf } from './sample'
 import { ART_ROWS, cropTop, heroRows } from './window'
 
 /**
@@ -20,6 +20,17 @@ import { ART_ROWS, cropTop, heroRows } from './window'
 const DEVICE = 1
 /** The figure the band draws (hooks/register.tsx). */
 const FIGURE = '3d'
+
+/**
+ * How a frame's cells are drawn: half blocks, one colour per terminal pixel,
+ * or 2×2 quadrants, two colours per cell at twice the detail across.
+ */
+export type Glyphs = 'half' | 'quadrant'
+
+/** The glyphs a look is drawn in when `asked`: pixel art is always half blocks, one art pixel per terminal pixel. */
+export function glyphsOf(at: Pick<Plan, 'pixel'>, asked: Glyphs): Glyphs {
+  return at.pixel ? 'half' : asked
+}
 
 /** What of a job decides its layout. */
 export interface Shape {
@@ -81,15 +92,23 @@ export function terminalSvg(job: Shape, at: Plan = plan(job)): { svg: string; sp
   return { svg: `${root}<style>[data-part="speech"]{display:none}</style>${svg.slice(open)}`, speaks: speaksAfter(svg) }
 }
 
-/** One frame's RGBA, `at.width × at.height`, as the band's `columns × rows*2` RGB pixels. */
-export function toPixels(rgba: Uint8Array, at: Plan, columns: number, rows: number): Uint8Array {
+/**
+ * One frame's RGBA, `at.width × at.height`, as the band's pixels: `columns × rows*2`
+ * for half blocks, and `columns*2 × rows*2` subpixels (half an art pixel across,
+ * one down) for quadrants. Pixel art is point-sampled, and always half blocks
+ * (glyphsOf); the other looks are averaged.
+ */
+export function toPixels(rgba: Uint8Array, at: Plan, columns: number, rows: number, glyphs: Glyphs = 'half'): Uint8Array {
   const pixelRows = rows * 2
   if (at.pixel) return pointSample(rgba, at.width, at.height, at.factor, { x0: at.x0, y0: at.y0, columns, rows: pixelRows })
+  const split = glyphs === 'quadrant' ? 2 : 1
   // Averaged: the window's rows only, then its columns.
-  const band = downsample(rowsOf(rgba, at.width, at.y0 * at.factor, pixelRows * at.factor), at.width, pixelRows * at.factor, at.factor)
-  const across = at.width / at.factor
-  if (across === columns) return band
-  const out = new Uint8Array(columns * pixelRows * 3)
-  for (let y = 0; y < pixelRows; y++) out.set(band.subarray((y * across + at.x0) * 3, (y * across + at.x0 + columns) * 3), y * columns * 3)
+  const band = downsampleBlocks(rowsOf(rgba, at.width, at.y0 * at.factor, pixelRows * at.factor), at.width, pixelRows * at.factor, at.factor / split, at.factor)
+  const across = (at.width / at.factor) * split
+  const wide = columns * split
+  if (across === wide) return band
+  const x0 = at.x0 * split
+  const out = new Uint8Array(wide * pixelRows * 3)
+  for (let y = 0; y < pixelRows; y++) out.set(band.subarray((y * across + x0) * 3, (y * across + x0 + wide) * 3), y * wide * 3)
   return out
 }

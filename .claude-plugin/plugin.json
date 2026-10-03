@@ -23,6 +23,13 @@
       "title": "Chromium",
       "description": "The Chromium (or Chrome) the terminal band draws its frames with: a command on PATH or an absolute path.",
       "default": "chromium"
+    },
+    "terminalGlyphs": {
+      "type": "string",
+      "title": "Terminal band glyphs",
+      "description": "How the terminal band draws its cells: auto draws pixel art in half blocks and every painted look in 2x2 quadrant glyphs, twice the detail across; half or quadrant asks for one for every look (pixel art is always half blocks).",
+      "default": "auto",
+      "options": ["auto", "half", "quadrant"]
     }
   }
 }

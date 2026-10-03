@@ -143,13 +143,23 @@ function mix(from: number, to: number, a: number): number {
   return out
 }
 
-/** Cells `a` (0 to 1) of the way from `from` to `to`, colour by colour: the band's cross-fade. Both are one box's. */
+/**
+ * Cells `a` (0 to 1) of the way from `from` to `to`: the band's cross-fade. Both
+ * are one box's. Where a cell's glyph is the same at both ends its fg and bg
+ * mix colour by colour; where it differs (a half block against a quadrant, or
+ * two quadrants inking different corners) mixed colours would draw neither
+ * picture, so the cell is the from-cell, whole, below 0.5 and the to-cell from 0.5.
+ */
 export function blend(from: Uint32Array, to: Uint32Array, a: number): Uint32Array {
   if (from.length !== to.length) return to
   const k = Math.max(0, Math.min(1, a))
   const out = new Uint32Array(to.length)
   for (let i = 0; i < to.length; i += 3) {
-    out[i] = k < 0.5 ? from[i]! : to[i]!
+    if (from[i] !== to[i]) {
+      out.set((k < 0.5 ? from : to).subarray(i, i + 3), i)
+      continue
+    }
+    out[i] = to[i]!
     out[i + 1] = mix(from[i + 1]!, to[i + 1]!, k)
     out[i + 2] = mix(from[i + 2]!, to[i + 2]!, k)
   }

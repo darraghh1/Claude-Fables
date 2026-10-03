@@ -50,17 +50,26 @@ export function rowsOf(rgba: Uint8Array, width: number, y0: number, rows: number
  * returning RGB of `width/factor × height/factor`.
  */
 export function downsample(rgba: Uint8Array, width: number, height: number, factor: number, amount = 0.8): Uint8Array {
-  const w = Math.floor(width / factor)
-  const h = Math.floor(height / factor)
+  return downsampleBlocks(rgba, width, height, factor, factor, amount)
+}
+
+/**
+ * downsample with blocks `across × down` pixels rather than square: the
+ * quadrant glyphs' subpixels are half a cell wide and half a cell tall, so half
+ * an art pixel across and a whole one down. Returns RGB of `width/across × height/down`.
+ */
+export function downsampleBlocks(rgba: Uint8Array, width: number, height: number, across: number, down: number, amount = 0.8): Uint8Array {
+  const w = Math.floor(width / across)
+  const h = Math.floor(height / down)
   if (rgba.length < width * height * 4) throw new Error(`expected ${width * height * 4} bytes of RGBA, got ${rgba.length}`)
   const avg = new Float32Array(w * h * 3)
-  const area = factor * factor
+  const area = across * down
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
       let r = 0, g = 0, b = 0
-      for (let dy = 0; dy < factor; dy++) {
-        let k = ((y * factor + dy) * width + x * factor) * 4
-        for (let dx = 0; dx < factor; dx++, k += 4) {
+      for (let dy = 0; dy < down; dy++) {
+        let k = ((y * down + dy) * width + x * across) * 4
+        for (let dx = 0; dx < across; dx++, k += 4) {
           r += rgba[k]!
           g += rgba[k + 1]!
           b += rgba[k + 2]!
