@@ -211,3 +211,11 @@
 {"at":"2026-10-03T01:30:54.054Z","actor":"darragh","verb":"bp order findings append","id":"WO-005","path":"orders/WO-005.findings.md"}
 {"at":"2026-10-03T01:31:29.307Z","actor":"8724e666-3b9f-47cd-a9c8-c45af498d5d3","verb":"bp order set","id":"WO-005","path":"orders/WO-005.md","from":"in-progress","to":"review"}
 {"at":"2026-10-03T01:31:29.507Z","actor":"8724e666-3b9f-47cd-a9c8-c45af498d5d3","verb":"bp order progress","id":"WO-005","path":"orders/WO-005.progress.md"}
+{"at":"2026-10-03T12:45:30.237Z","actor":"8724e666-3b9f-47cd-a9c8-c45af498d5d3","verb":"bp issue add","id":"ISS-002","path":"issues/ISS-002.md"}
+{"at":"2026-10-03T12:45:40.849Z","actor":"8724e666-3b9f-47cd-a9c8-c45af498d5d3","verb":"bp idea triage","id":"IDEA-001","path":"ideas/IDEA-001.md","from":"inbox","to":"triaged"}
+{"at":"2026-10-03T12:45:40.911Z","actor":"8724e666-3b9f-47cd-a9c8-c45af498d5d3","verb":"bp idea triage","id":"IDEA-002","path":"ideas/IDEA-002.md","from":"inbox","to":"triaged"}
+{"at":"2026-10-03T12:45:40.975Z","actor":"8724e666-3b9f-47cd-a9c8-c45af498d5d3","verb":"bp idea triage","id":"IDEA-003","path":"ideas/IDEA-003.md","from":"inbox","to":"triaged"}
+{"at":"2026-10-03T12:45:41.038Z","actor":"8724e666-3b9f-47cd-a9c8-c45af498d5d3","verb":"bp idea triage","id":"IDEA-004","path":"ideas/IDEA-004.md","from":"inbox","to":"triaged"}
+{"at":"2026-10-03T12:45:41.099Z","actor":"8724e666-3b9f-47cd-a9c8-c45af498d5d3","verb":"bp idea triage","id":"IDEA-005","path":"ideas/IDEA-005.md","from":"inbox","to":"triaged"}
+{"at":"2026-10-03T12:45:41.162Z","actor":"8724e666-3b9f-47cd-a9c8-c45af498d5d3","verb":"bp idea triage","id":"IDEA-006","path":"ideas/IDEA-006.md","from":"inbox","to":"triaged"}
+{"at":"2026-10-03T12:45:41.225Z","actor":"8724e666-3b9f-47cd-a9c8-c45af498d5d3","verb":"bp archetype set","id":"claude-code-mod","path":"archetypes/claude-code-mod.md"}

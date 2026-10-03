@@ -10,9 +10,12 @@ requirements:
 - "always: M-05 No orphan children — Every $.process.spawn child (and anything it starts, e.g. a browser) ends when its stream loop ends, the scene is replaced, or the module unloads."
 - "always: M-06 Zero install step — Helpers use only bun built-ins and host binaries; no package.json dependencies, because a plugin install runs no package manager."
 - "should: M-07 Degrade, not break — When a host binary a helper needs is missing, the mod falls back to a cheaper drawing and says why once in the debug log."
+- "always: M-08 Live smoke before close — Any order that changes what a surface draws carries a lead-owned live criterion: run the mod in a real session (tmux: -e COLORTERM=truecolor -e CLAUDE_CODE_TMUX_TRUECOLOR=1 -e CLAUDE_CODE_PLUGIN_DIRS= , claude --plugin-dir <tree>) and capture the band with tmux capture-pane -e. claude plugin test mocks the helper and approved a band that drew only grey in WO-002."
+- "should: M-09 Shared plugin state in tests — $.store values (enabled, style, model) are shared by every session on the machine: a test session that runs /fables off or /fables style must restore the value before it ends."
+- "should: M-10 Measure perceptual criteria before fixing thresholds — prototype a sharpness/seam metric against the baseline before writing its threshold into an order; WO-003 and WO-004 each needed a lead ruling to replace a metric that rewarded the wrong thing."
 verify: []
 category: Claude Code plugin
-updated: "2026-10-02"
+updated: "2026-10-03"
 ---
 
 # Claude Code Mod (hooks module plugin)
